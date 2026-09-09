@@ -40,7 +40,7 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 )
 
-//go:embed web/khatere-api-tester.html
+//go:embed web/khatere-api-console.html
 var apiTesterHTML []byte
 
 // deps bundles the already-connected infrastructure clients that the
