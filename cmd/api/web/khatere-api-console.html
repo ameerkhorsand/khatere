@@ -404,7 +404,7 @@
 
   <header class="page">
     <h1>Khatere API console</h1>
-    <p>Runs every endpoint built so far — auth, user profiles, interests, host, moderator, circle, and activity catalog + moderation — against a live API and shows the real request path and response for each step. The panel on the right always shows the exact JSON request each test sends, in run order, so you can scroll back and compare any two tests.</p>
+    <p>Runs every endpoint built so far — auth, user profiles, interests, host, moderator, circle, activity catalog + moderation, hangout planning, and the meetup pin — against a live API and shows the real request path and response for each step. The panel on the right always shows the exact JSON request each test sends, in run order, so you can scroll back and compare any two tests.</p>
   </header>
 
   <div class="controls">
@@ -443,6 +443,12 @@
     <h2>Batch 3 — Hangouts</h2>
     <p class="sub">Create a hangout, invite participants, accept/reject, list by tab, chat, and cancel.</p>
     <div id="batch3Steps"></div>
+  </section>
+
+  <section class="batch b4">
+    <h2>Batch 4 — Meetup Pin</h2>
+    <p class="sub">Propose a time and place on a fresh hangout, confirm as a participant, change the pin and check every confirmation resets to pending, and check the guard rails (wrong user, no pin yet, hangout already cancelled).</p>
+    <div id="batch4Steps"></div>
   </section>
 
   <footer class="note">
@@ -1268,6 +1274,171 @@
         return { pass: r.status === 409, raw: r };
       }
     },
+
+    // ---- Batch 4: Meetup Pin ----
+    // Uses its own hangout (state.mpHangoutID), separate from Batch 3's,
+    // because Batch 3 ends with that hangout cancelled — a pin needs a
+    // live hangout to propose against.
+    {
+      id: "mp_create_hangout", batch: 4, title: "A creates a second hangout, for the meetup pin tests",
+      method: "POST", path: "/hangouts",
+      run: async () => {
+        const r = await call("POST", "/hangouts", u("A").token, {
+          title: "Pin test " + RUN_ID,
+          description: "Console test hangout for meetup pins",
+        });
+        if (r.status === 201 && r.body) state.mpHangoutID = r.body.ID || r.body.id;
+        return { pass: r.status === 201 && r.body && r.body.Status === "planned", raw: r };
+      }
+    },
+    {
+      id: "mp_invite_b", batch: 4, title: "A invites B to the new hangout",
+      method: "POST", path: "/hangouts/:id/invites",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.mpHangoutID + "/invites", u("A").token, {
+          user_ids: [u("B").accountId],
+        });
+        return { pass: r.status === 200, raw: r };
+      }
+    },
+    {
+      id: "mp_accept_b", batch: 4, title: "B accepts — both A and B are now accepted participants",
+      method: "POST", path: "/hangouts/:id/invites/respond",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.mpHangoutID + "/invites/respond", u("B").token, {
+          accept: true,
+        });
+        return { pass: r.status === 200 && r.body && r.body.InviteStatus === "accepted", raw: r };
+      }
+    },
+    {
+      id: "mp_get_before_propose_404", batch: 4, title: "Getting the pin before anyone proposed one returns 404",
+      method: "GET", path: "/hangouts/:id/pin",
+      run: async () => {
+        const r = await call("GET", "/hangouts/" + state.mpHangoutID + "/pin", u("A").token, null);
+        return { pass: r.status === 404, raw: r };
+      }
+    },
+    {
+      id: "mp_propose_forbidden_for_non_organizer", batch: 4, title: "B (not the organizer) cannot propose a pin",
+      method: "POST", path: "/hangouts/:id/pin",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.mpHangoutID + "/pin", u("B").token, {
+          place_name: "B's suggestion",
+          latitude: 37.7749,
+          longitude: -122.4194,
+        });
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+    {
+      id: "mp_propose_first", batch: 4, title: "A proposes the first pin — version 1",
+      method: "POST", path: "/hangouts/:id/pin",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.mpHangoutID + "/pin", u("A").token, {
+          place_name: "Blue Bottle Coffee",
+          address: "1 Ferry Building, San Francisco",
+          latitude: 37.7955,
+          longitude: -122.3937,
+          scheduled_at: "2026-09-20T18:00:00Z",
+        });
+        return { pass: r.status === 200 && r.body && r.body.Version === 1 && r.body.PlaceName === "Blue Bottle Coffee", raw: r };
+      }
+    },
+    {
+      id: "mp_get_after_first_propose", batch: 4, title: "Get pin — both A and B show as pending confirmation",
+      method: "GET", path: "/hangouts/:id/pin",
+      run: async () => {
+        const r = await call("GET", "/hangouts/" + state.mpHangoutID + "/pin", u("B").token, null);
+        const confs = r.body && r.body.Confirmations ? r.body.Confirmations : [];
+        const ok = r.status === 200 && confs.length === 2 && confs.every(c => c.Status === "pending");
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "mp_respond_not_participant_404", batch: 4, title: "HOST (never invited to this hangout) cannot confirm the pin",
+      method: "POST", path: "/hangouts/:id/pin/respond",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.mpHangoutID + "/pin/respond", u("HOST").token, {
+          confirm: true,
+        });
+        return { pass: r.status === 404, raw: r };
+      }
+    },
+    {
+      id: "mp_confirm_b", batch: 4, title: "B confirms the pin",
+      method: "POST", path: "/hangouts/:id/pin/respond",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.mpHangoutID + "/pin/respond", u("B").token, {
+          confirm: true,
+        });
+        return { pass: r.status === 200 && r.body && r.body.Status === "confirmed", raw: r };
+      }
+    },
+    {
+      id: "mp_get_after_b_confirms", batch: 4, title: "Get pin — B now shows confirmed",
+      method: "GET", path: "/hangouts/:id/pin",
+      run: async () => {
+        const r = await call("GET", "/hangouts/" + state.mpHangoutID + "/pin", u("A").token, null);
+        const confs = r.body && r.body.Confirmations ? r.body.Confirmations : [];
+        const bConf = confs.find(c => c.UserID === u("B").accountId);
+        return { pass: r.status === 200 && bConf && bConf.Status === "confirmed", raw: r };
+      }
+    },
+    {
+      id: "mp_propose_change", batch: 4, title: "A changes the place and time — version bumps to 2",
+      method: "POST", path: "/hangouts/:id/pin",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.mpHangoutID + "/pin", u("A").token, {
+          place_name: "Philz Coffee",
+          latitude: 37.7765,
+          longitude: -122.4185,
+          scheduled_at: "2026-09-20T19:00:00Z",
+        });
+        return { pass: r.status === 200 && r.body && r.body.Version === 2 && r.body.PlaceName === "Philz Coffee", raw: r };
+      }
+    },
+    {
+      id: "mp_get_after_change_resets_b", batch: 4, title: "Get pin — B's confirmation reset back to pending after the change",
+      method: "GET", path: "/hangouts/:id/pin",
+      run: async () => {
+        const r = await call("GET", "/hangouts/" + state.mpHangoutID + "/pin", u("B").token, null);
+        const confs = r.body && r.body.Confirmations ? r.body.Confirmations : [];
+        const bConf = confs.find(c => c.UserID === u("B").accountId);
+        const ok = r.status === 200 && r.body.Pin && r.body.Pin.Version === 2 && bConf && bConf.Status === "pending";
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "mp_cancel_hangout", batch: 4, title: "A cancels this hangout, to test the pin guard rails on a final hangout",
+      method: "POST", path: "/hangouts/:id/cancel",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.mpHangoutID + "/cancel", u("A").token, null);
+        return { pass: r.status === 200 && r.body && r.body.Status === "cancelled", raw: r };
+      }
+    },
+    {
+      id: "mp_propose_after_cancel_conflict", batch: 4, title: "Proposing a pin on a cancelled hangout is rejected",
+      method: "POST", path: "/hangouts/:id/pin",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.mpHangoutID + "/pin", u("A").token, {
+          place_name: "Too late",
+          latitude: 0,
+          longitude: 0,
+        });
+        return { pass: r.status === 409, raw: r };
+      }
+    },
+    {
+      id: "mp_respond_after_cancel_conflict", batch: 4, title: "Confirming a pin on a cancelled hangout is rejected",
+      method: "POST", path: "/hangouts/:id/pin/respond",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.mpHangoutID + "/pin/respond", u("B").token, {
+          confirm: true,
+        });
+        return { pass: r.status === 409, raw: r };
+      }
+    },
   ];
 
   // ---------- rendering ----------
@@ -1277,10 +1448,12 @@
     const b1 = document.getElementById("batch1Steps");
     const b2 = document.getElementById("batch2Steps");
     const b3 = document.getElementById("batch3Steps");
+    const b4 = document.getElementById("batch4Steps");
     b0.innerHTML = "";
     b1.innerHTML = "";
     b2.innerHTML = "";
     b3.innerHTML = "";
+    b4.innerHTML = "";
 
     allSteps.forEach((step, idx) => {
       const row = el(`
@@ -1299,7 +1472,7 @@
         </div>
       `);
       row.querySelector('[data-role="jump"]').addEventListener("click", () => jumpToRequest(step.id));
-      const container = step.batch === 0 ? b0 : step.batch === 1 ? b1 : step.batch === 2 ? b2 : b3;
+      const container = step.batch === 0 ? b0 : step.batch === 1 ? b1 : step.batch === 2 ? b2 : step.batch === 3 ? b3 : b4;
       container.appendChild(row);
     });
   }

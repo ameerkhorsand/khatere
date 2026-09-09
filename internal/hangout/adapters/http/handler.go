@@ -22,6 +22,9 @@ type Handlers struct {
 	updateStatus       *application.UpdateHangoutStatusUseCase
 	sendMessage        *application.SendMessageUseCase
 	listMessages       *application.ListMessagesUseCase
+	proposeMeetupPin   *application.ProposeMeetupPinUseCase
+	respondToMeetupPin *application.RespondToMeetupPinUseCase
+	getMeetupPin       *application.GetMeetupPinUseCase
 }
 
 func NewHandlers(
@@ -34,11 +37,15 @@ func NewHandlers(
 	updateStatus *application.UpdateHangoutStatusUseCase,
 	sendMessage *application.SendMessageUseCase,
 	listMessages *application.ListMessagesUseCase,
+	proposeMeetupPin *application.ProposeMeetupPinUseCase,
+	respondToMeetupPin *application.RespondToMeetupPinUseCase,
+	getMeetupPin *application.GetMeetupPinUseCase,
 ) *Handlers {
 	return &Handlers{
 		createHangout, getHangout, listHangouts,
 		inviteParticipants, respondToInvite, cancelHangout,
 		updateStatus, sendMessage, listMessages,
+		proposeMeetupPin, respondToMeetupPin, getMeetupPin,
 	}
 }
 
@@ -55,6 +62,10 @@ func (h *Handlers) RegisterRoutes(r *gin.RouterGroup) {
 
 	r.GET("/:id/messages", h.ListMessages)
 	r.POST("/:id/messages", h.SendMessage)
+
+	r.GET("/:id/pin", h.GetMeetupPin)
+	r.POST("/:id/pin", h.ProposeMeetupPin)
+	r.POST("/:id/pin/respond", h.RespondToMeetupPin)
 }
 
 func accountIDFromContext(c *gin.Context) (uuid.UUID, error) {
@@ -86,7 +97,9 @@ func hangoutIDParam(c *gin.Context) (uuid.UUID, bool) {
 func handleUseCaseError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, domain.ErrHangoutNotFound),
-		errors.Is(err, domain.ErrParticipantNotFound):
+		errors.Is(err, domain.ErrParticipantNotFound),
+		errors.Is(err, domain.ErrPinNotFound),
+		errors.Is(err, domain.ErrPinConfirmationNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 	case errors.Is(err, domain.ErrNotOrganizer),
 		errors.Is(err, domain.ErrNotInvited),
@@ -96,7 +109,8 @@ func handleUseCaseError(c *gin.Context, err error) {
 		errors.Is(err, domain.ErrVersionConflict),
 		errors.Is(err, domain.ErrParticipantLimit),
 		errors.Is(err, domain.ErrAlreadyParticipant),
-		errors.Is(err, domain.ErrInviteAlreadyAnswered):
+		errors.Is(err, domain.ErrInviteAlreadyAnswered),
+		errors.Is(err, domain.ErrPinVersionConflict):
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 	case errors.Is(err, domain.ErrInvalidHangoutStatus),
 		errors.Is(err, application.ErrEmptyMessage),
@@ -430,4 +444,120 @@ func (h *Handlers) ListMessages(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, messages)
+}
+
+// -----------------------------------------------------------------
+// Meetup Pin
+// -----------------------------------------------------------------
+
+type proposeMeetupPinRequest struct {
+	PlaceName string  `json:"place_name" binding:"required"`
+	Address   *string `json:"address"`
+	// Latitude and Longitude have no "required" tag on purpose:
+	// Go's validator treats a numeric zero as "missing", but 0,0 is
+	// a real coordinate. PlaceName being required is enough to
+	// catch a genuinely empty request.
+	Latitude    float64    `json:"latitude"`
+	Longitude   float64    `json:"longitude"`
+	ScheduledAt *time.Time `json:"scheduled_at"`
+}
+
+// ProposeMeetupPin handles both the first pin for a hangout and any
+// later change to it — same request shape either way. A change
+// resets every participant's confirmation, which is why the
+// frontend should treat this as "propose or update", not just
+// "create".
+func (h *Handlers) ProposeMeetupPin(c *gin.Context) {
+	id, ok := hangoutIDParam(c)
+	if !ok {
+		return
+	}
+	proposerID, err := accountIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	var req proposeMeetupPinRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	pin, err := h.proposeMeetupPin.Execute(c.Request.Context(), application.ProposeMeetupPinInput{
+		HangoutID:   id,
+		ProposerID:  proposerID,
+		PlaceName:   req.PlaceName,
+		Address:     req.Address,
+		Latitude:    req.Latitude,
+		Longitude:   req.Longitude,
+		ScheduledAt: req.ScheduledAt,
+	})
+	if err != nil {
+		handleUseCaseError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, pin)
+}
+
+type respondToMeetupPinRequest struct {
+	Confirm bool `json:"confirm"`
+}
+
+func (h *Handlers) RespondToMeetupPin(c *gin.Context) {
+	id, ok := hangoutIDParam(c)
+	if !ok {
+		return
+	}
+	userID, err := accountIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	var req respondToMeetupPinRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	confirmation, err := h.respondToMeetupPin.Execute(c.Request.Context(), application.RespondToMeetupPinInput{
+		HangoutID: id,
+		UserID:    userID,
+		Confirm:   req.Confirm,
+	})
+	if err != nil {
+		handleUseCaseError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, confirmation)
+}
+
+// GetMeetupPin returns the current pin plus every participant's
+// confirmation state, for the pinned banner on the Hangout Chat
+// screen. A 404 here means no pin has been proposed yet — the
+// frontend should treat that as "nothing pinned", not an error.
+func (h *Handlers) GetMeetupPin(c *gin.Context) {
+	id, ok := hangoutIDParam(c)
+	if !ok {
+		return
+	}
+	requesterID, err := accountIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	summary, err := h.getMeetupPin.Execute(c.Request.Context(), application.GetMeetupPinInput{
+		HangoutID:   id,
+		RequesterID: requesterID,
+	})
+	if err != nil {
+		handleUseCaseError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, summary)
 }

@@ -77,3 +77,36 @@ type MessageRepository interface {
 	// newest first, matching filter.
 	ListMessages(ctx context.Context, hangoutID uuid.UUID, filter MessageFilter) ([]Message, error)
 }
+
+// MeetupPinRepository manages the single pin row for a hangout.
+type MeetupPinRepository interface {
+	// Create inserts the first pin for a hangout. Returns a
+	// constraint error if a pin already exists for this hangout;
+	// the caller should use Update for a change to an existing pin.
+	Create(ctx context.Context, pin *MeetupPin) error
+
+	FindByHangoutID(ctx context.Context, hangoutID uuid.UUID) (*MeetupPin, error)
+
+	// Update performs an optimistic-lock update: checks
+	// pin.Version against the stored row, returns
+	// ErrPinVersionConflict on mismatch.
+	Update(ctx context.Context, pin *MeetupPin) error
+}
+
+// PinConfirmationRepository manages one confirmation row per
+// participant per pin.
+type PinConfirmationRepository interface {
+	// ResetForPin deletes every existing confirmation row for
+	// pinID and inserts a fresh 'pending' row for each userID
+	// given. Used both on first proposal and on every later change,
+	// so every participant re-confirms against the latest version.
+	ResetForPin(ctx context.Context, pinID uuid.UUID, userIDs []uuid.UUID) error
+
+	FindConfirmation(ctx context.Context, pinID, userID uuid.UUID) (*PinConfirmation, error)
+
+	ListByPin(ctx context.Context, pinID uuid.UUID) ([]PinConfirmation, error)
+
+	// UpdateConfirmation writes back one participant's response
+	// (status, confirmed_at).
+	UpdateConfirmation(ctx context.Context, confirmation *PinConfirmation) error
+}

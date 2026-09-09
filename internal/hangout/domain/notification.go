@@ -17,6 +17,17 @@ const (
 	NotificationHangoutInvite    NotificationType = "hangout_invite"
 	NotificationInviteResponded  NotificationType = "hangout_invite_responded"
 	NotificationHangoutCancelled NotificationType = "hangout_cancelled"
+
+	// NotificationMeetupPinProposed fires once, when a hangout gets
+	// its first pin.
+	NotificationMeetupPinProposed NotificationType = "meetup_pin_proposed"
+	// NotificationMeetupPinChanged fires on every later change to an
+	// existing pin. It tells each participant they must confirm
+	// again, since their prior confirmation was reset.
+	NotificationMeetupPinChanged NotificationType = "meetup_pin_changed"
+	// NotificationMeetupPinConfirmed goes to the organizer each time
+	// a participant confirms the current pin.
+	NotificationMeetupPinConfirmed NotificationType = "meetup_pin_confirmed"
 )
 
 // Notification describes one event worth telling someone about.

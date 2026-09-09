@@ -169,6 +169,8 @@ func newRouter(d deps) *gin.Engine {
 	hangoutRepo := hangoutPG.NewHangoutRepository(d.pool)
 	participantRepo := hangoutPG.NewParticipantRepository(d.pool)
 	messageRepo := hangoutPG.NewMessageRepository(d.pool)
+	meetupPinRepo := hangoutPG.NewMeetupPinRepository(d.pool)
+	pinConfirmationRepo := hangoutPG.NewPinConfirmationRepository(d.pool)
 	hangoutNotifier := hangoutNotif.NewLogNotifier() // swap for a real adapter once notification infra exists
 
 	createHangoutUC := hangoutApp.NewCreateHangoutUseCase(hangoutRepo, participantRepo, hangoutStore)
@@ -180,6 +182,9 @@ func newRouter(d deps) *gin.Engine {
 	updateHangoutStatusUC := hangoutApp.NewUpdateHangoutStatusUseCase(hangoutRepo)
 	sendMessageUC := hangoutApp.NewSendMessageUseCase(participantRepo, messageRepo)
 	listMessagesUC := hangoutApp.NewListMessagesUseCase(participantRepo, messageRepo)
+	proposeMeetupPinUC := hangoutApp.NewProposeMeetupPinUseCase(hangoutRepo, participantRepo, meetupPinRepo, pinConfirmationRepo, hangoutNotifier, hangoutStore)
+	respondToMeetupPinUC := hangoutApp.NewRespondToMeetupPinUseCase(hangoutRepo, meetupPinRepo, pinConfirmationRepo, hangoutNotifier)
+	getMeetupPinUC := hangoutApp.NewGetMeetupPinUseCase(participantRepo, meetupPinRepo, pinConfirmationRepo)
 
 	hangoutHandlers := hangoutHTTP.NewHandlers(
 		createHangoutUC,
@@ -191,6 +196,9 @@ func newRouter(d deps) *gin.Engine {
 		updateHangoutStatusUC,
 		sendMessageUC,
 		listMessagesUC,
+		proposeMeetupPinUC,
+		respondToMeetupPinUC,
+		getMeetupPinUC,
 	)
 
 	// --- Router ---
