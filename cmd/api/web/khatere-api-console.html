@@ -439,6 +439,12 @@
     <div id="batch2Steps"></div>
   </section>
 
+  <section class="batch b3">
+    <h2>Batch 3 — Hangouts</h2>
+    <p class="sub">Create a hangout, invite participants, accept/reject, list by tab, chat, and cancel.</p>
+    <div id="batch3Steps"></div>
+  </section>
+
   <footer class="note">
     Each run creates fresh test accounts using a timestamp, so it's safe to run this repeatedly without hitting duplicate email or handle conflicts. Click any step to see the exact request path and the raw response body. Click the ↦ button on a step to jump to its request in the right-hand panel.
   </footer>
@@ -1108,6 +1114,160 @@
         return { pass: r.status === 404, raw: r };
       }
     },
+
+    // ---- Batch 3: Hangouts ----
+    {
+      id: "hg_create", batch: 3, title: "A creates a hangout — starts planned, A is the organizer",
+      method: "POST", path: "/hangouts",
+      run: async () => {
+        const r = await call("POST", "/hangouts", u("A").token, {
+          title: "Coffee " + RUN_ID,
+          description: "Console test hangout",
+        });
+        if (r.status === 201 && r.body) state.hgID = r.body.ID || r.body.id;
+        return { pass: r.status === 201 && r.body && r.body.Status === "planned", raw: r };
+      }
+    },
+    {
+      id: "hg_invite_b", batch: 3, title: "A invites B — B's invite is pending",
+      method: "POST", path: "/hangouts/:id/invites",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.hgID + "/invites", u("A").token, {
+          user_ids: [u("B").accountId],
+        });
+        const text = r.body ? JSON.stringify(r.body) : "";
+        return { pass: r.status === 200 && text.includes("pending"), raw: r };
+      }
+    },
+    {
+      id: "hg_invite_forbidden_for_non_organizer", batch: 3, title: "B (not the organizer) cannot invite to A's hangout",
+      method: "POST", path: "/hangouts/:id/invites",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.hgID + "/invites", u("B").token, {
+          user_ids: [u("HOST").accountId],
+        });
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+    {
+      id: "hg_chat_blocked_before_accept", batch: 3, title: "B cannot post to the chat before accepting the invite",
+      method: "POST", path: "/hangouts/:id/messages",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.hgID + "/messages", u("B").token, {
+          content: "hi from B, too early",
+        });
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+    {
+      id: "hg_respond_accept", batch: 3, title: "B accepts the invite",
+      method: "POST", path: "/hangouts/:id/invites/respond",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.hgID + "/invites/respond", u("B").token, {
+          accept: true,
+        });
+        return { pass: r.status === 200 && r.body && r.body.InviteStatus === "accepted", raw: r };
+      }
+    },
+    {
+      id: "hg_respond_twice_conflict", batch: 3, title: "B answering again is rejected — invite already answered",
+      method: "POST", path: "/hangouts/:id/invites/respond",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.hgID + "/invites/respond", u("B").token, {
+          accept: false,
+        });
+        return { pass: r.status === 409, raw: r };
+      }
+    },
+    {
+      id: "hg_get_detail_lists_participants", batch: 3, title: "Get hangout detail — shows both A (organizer) and B (accepted)",
+      method: "GET", path: "/hangouts/:id",
+      run: async () => {
+        const r = await call("GET", "/hangouts/" + state.hgID, u("A").token, null);
+        const text = r.body ? JSON.stringify(r.body) : "";
+        const ok = r.status === 200 && text.includes(u("A").accountId) && text.includes(u("B").accountId);
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "hg_get_detail_forbidden_for_outsider", batch: 3, title: "HOST (not invited) cannot view the hangout",
+      method: "GET", path: "/hangouts/:id",
+      run: async () => {
+        const r = await call("GET", "/hangouts/" + state.hgID, u("HOST").token, null);
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+    {
+      id: "hg_chat_after_accept", batch: 3, title: "B can now post to the chat",
+      method: "POST", path: "/hangouts/:id/messages",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.hgID + "/messages", u("B").token, {
+          content: "hi A, see you there",
+        });
+        return { pass: r.status === 201, raw: r };
+      }
+    },
+    {
+      id: "hg_list_messages", batch: 3, title: "List messages — B's message is there",
+      method: "GET", path: "/hangouts/:id/messages",
+      run: async () => {
+        const r = await call("GET", "/hangouts/" + state.hgID + "/messages", u("A").token, null);
+        const text = r.body ? JSON.stringify(r.body) : "";
+        return { pass: r.status === 200 && text.includes("see you there"), raw: r };
+      }
+    },
+    {
+      id: "hg_list_upcoming_tab", batch: 3, title: "Upcoming tab (status=planned) includes this hangout for A",
+      method: "GET", path: "/hangouts?status=planned",
+      run: async () => {
+        const r = await call("GET", "/hangouts?status=planned", u("A").token, null);
+        const text = r.body ? JSON.stringify(r.body) : "";
+        return { pass: r.status === 200 && text.includes(state.hgID), raw: r };
+      }
+    },
+    {
+      id: "hg_cancel_forbidden_for_non_organizer", batch: 3, title: "B (not the organizer) cannot cancel",
+      method: "POST", path: "/hangouts/:id/cancel",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.hgID + "/cancel", u("B").token, null);
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+    {
+      id: "hg_cancel", batch: 3, title: "A cancels the hangout",
+      method: "POST", path: "/hangouts/:id/cancel",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.hgID + "/cancel", u("A").token, null);
+        return { pass: r.status === 200 && r.body && r.body.Status === "cancelled", raw: r };
+      }
+    },
+    {
+      id: "hg_didnt_happen_tab", batch: 3, title: "Didn't Happen tab (status=cancelled) now includes this hangout",
+      method: "GET", path: "/hangouts?status=cancelled",
+      run: async () => {
+        const r = await call("GET", "/hangouts?status=cancelled", u("A").token, null);
+        const text = r.body ? JSON.stringify(r.body) : "";
+        return { pass: r.status === 200 && text.includes(state.hgID), raw: r };
+      }
+    },
+    {
+      id: "hg_cancel_twice_conflict", batch: 3, title: "Cancelling an already-cancelled hangout is rejected",
+      method: "POST", path: "/hangouts/:id/cancel",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.hgID + "/cancel", u("A").token, null);
+        return { pass: r.status === 409, raw: r };
+      }
+    },
+    {
+      id: "hg_invite_after_cancel_conflict", batch: 3, title: "Inviting to a cancelled hangout is rejected",
+      method: "POST", path: "/hangouts/:id/invites",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.hgID + "/invites", u("A").token, {
+          user_ids: [u("MOD").accountId],
+        });
+        return { pass: r.status === 409, raw: r };
+      }
+    },
   ];
 
   // ---------- rendering ----------
@@ -1116,9 +1276,11 @@
     const b0 = document.getElementById("batch0Steps");
     const b1 = document.getElementById("batch1Steps");
     const b2 = document.getElementById("batch2Steps");
+    const b3 = document.getElementById("batch3Steps");
     b0.innerHTML = "";
     b1.innerHTML = "";
     b2.innerHTML = "";
+    b3.innerHTML = "";
 
     allSteps.forEach((step, idx) => {
       const row = el(`
@@ -1137,7 +1299,7 @@
         </div>
       `);
       row.querySelector('[data-role="jump"]').addEventListener("click", () => jumpToRequest(step.id));
-      const container = step.batch === 0 ? b0 : step.batch === 1 ? b1 : b2;
+      const container = step.batch === 0 ? b0 : step.batch === 1 ? b1 : step.batch === 2 ? b2 : b3;
       container.appendChild(row);
     });
   }

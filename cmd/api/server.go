@@ -11,6 +11,11 @@ import (
 	activityPG "github.com/bLorax/khatere-backend/internal/activity/adapters/postgres"
 	activityApp "github.com/bLorax/khatere-backend/internal/activity/application"
 
+	hangoutHTTP "github.com/bLorax/khatere-backend/internal/hangout/adapters/http"
+	hangoutNotif "github.com/bLorax/khatere-backend/internal/hangout/adapters/notification"
+	hangoutPG "github.com/bLorax/khatere-backend/internal/hangout/adapters/postgres"
+	hangoutApp "github.com/bLorax/khatere-backend/internal/hangout/application"
+
 	circleHTTP "github.com/bLorax/khatere-backend/internal/circle/adapters/http"
 	circlePG "github.com/bLorax/khatere-backend/internal/circle/adapters/postgres"
 	circleApp "github.com/bLorax/khatere-backend/internal/circle/application"
@@ -159,6 +164,35 @@ func newRouter(d deps) *gin.Engine {
 		rejectActivityUC,
 	)
 
+	// --- Hangout domain wiring ---
+	hangoutStore := hangoutPG.NewStore(d.pool) // implements domain.Transactor
+	hangoutRepo := hangoutPG.NewHangoutRepository(d.pool)
+	participantRepo := hangoutPG.NewParticipantRepository(d.pool)
+	messageRepo := hangoutPG.NewMessageRepository(d.pool)
+	hangoutNotifier := hangoutNotif.NewLogNotifier() // swap for a real adapter once notification infra exists
+
+	createHangoutUC := hangoutApp.NewCreateHangoutUseCase(hangoutRepo, participantRepo, hangoutStore)
+	getHangoutUC := hangoutApp.NewGetHangoutUseCase(hangoutRepo, participantRepo)
+	listHangoutsUC := hangoutApp.NewListHangoutsUseCase(hangoutRepo)
+	inviteParticipantsUC := hangoutApp.NewInviteParticipantsUseCase(hangoutRepo, participantRepo, hangoutNotifier)
+	respondToInviteUC := hangoutApp.NewRespondToInviteUseCase(participantRepo, hangoutNotifier)
+	cancelHangoutUC := hangoutApp.NewCancelHangoutUseCase(hangoutRepo, participantRepo, hangoutNotifier)
+	updateHangoutStatusUC := hangoutApp.NewUpdateHangoutStatusUseCase(hangoutRepo)
+	sendMessageUC := hangoutApp.NewSendMessageUseCase(participantRepo, messageRepo)
+	listMessagesUC := hangoutApp.NewListMessagesUseCase(participantRepo, messageRepo)
+
+	hangoutHandlers := hangoutHTTP.NewHandlers(
+		createHangoutUC,
+		getHangoutUC,
+		listHangoutsUC,
+		inviteParticipantsUC,
+		respondToInviteUC,
+		cancelHangoutUC,
+		updateHangoutStatusUC,
+		sendMessageUC,
+		listMessagesUC,
+	)
+
 	// --- Router ---
 	router := gin.Default()
 
@@ -230,6 +264,10 @@ func newRouter(d deps) *gin.Engine {
 	activityGroup := router.Group("/activities")
 	activityGroup.Use(authMW)
 	activityHandlers.RegisterRoutes(activityGroup)
+
+	hangoutGroup := router.Group("/hangouts")
+	hangoutGroup.Use(authMW)
+	hangoutHandlers.RegisterRoutes(hangoutGroup)
 
 	return router
 }
