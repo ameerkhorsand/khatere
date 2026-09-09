@@ -238,17 +238,173 @@
     padding-top: 14px;
   }
 
+  /* ---- two-column layout ---- */
+
+  .layout {
+    display: flex;
+    align-items: flex-start;
+    gap: 20px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  .layout .wrap {
+    margin: 0;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .requests-panel {
+    flex: none;
+    width: 420px;
+    position: sticky;
+    top: 20px;
+    max-height: calc(100vh - 40px);
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .requests-panel-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid var(--border);
+    flex: none;
+  }
+
+  .requests-panel-header h2 {
+    font-size: 14px;
+    font-weight: 650;
+    margin: 0;
+  }
+
+  .req-count {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .requests-list {
+    overflow-y: auto;
+    padding: 10px 12px 14px;
+    flex: 1 1 auto;
+  }
+
+  .req-placeholder {
+    color: var(--muted);
+    font-size: 12.5px;
+    margin: 6px 2px;
+  }
+
+  .req-entry {
+    background: var(--raised);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+  }
+
+  .req-entry.highlight {
+    border-color: var(--rail-a);
+  }
+
+  .req-entry-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .req-index {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    flex: none;
+  }
+
+  .req-method {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 4px;
+    flex: none;
+  }
+
+  .req-method.get { color: var(--rail-a); background: rgba(108, 140, 255, 0.14); }
+  .req-method.post { color: var(--pass); background: rgba(82, 214, 155, 0.14); }
+  .req-method.patch { color: var(--pending); background: rgba(234, 179, 76, 0.14); }
+  .req-method.put { color: var(--pending); background: rgba(234, 179, 76, 0.14); }
+  .req-method.delete { color: var(--fail); background: rgba(255, 109, 109, 0.14); }
+
+  .req-path {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .req-entry-title {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+
+  .req-json {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    max-height: 200px;
+    overflow: auto;
+  }
+
+  .jump-btn {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 2px 7px;
+    border-radius: 5px;
+    flex: none;
+  }
+
+  @media (max-width: 1100px) {
+    .layout {
+      flex-direction: column;
+    }
+    .requests-panel {
+      width: 100%;
+      position: static;
+      max-height: 480px;
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
   }
 </style>
 </head>
 <body>
+<div class="layout">
 <div class="wrap">
 
   <header class="page">
     <h1>Khatere API console</h1>
-    <p>Runs every endpoint built so far — auth, user profiles, interests, host, moderator, and the circle domain — against a live API and shows the real request path and response for each step.</p>
+    <p>Runs every endpoint built so far — auth, user profiles, interests, host, moderator, circle, and activity catalog + moderation — against a live API and shows the real request path and response for each step. The panel on the right always shows the exact JSON request each test sends, in run order, so you can scroll back and compare any two tests.</p>
   </header>
 
   <div class="controls">
@@ -277,9 +433,27 @@
     <div id="batch1Steps"></div>
   </section>
 
+  <section class="batch b2">
+    <h2>Batch 2 — Activity catalog + moderation</h2>
+    <p class="sub">Create activities as a user, a host, and a moderator; check that only approved activities are public; check that only moderators can see the queue or approve/reject; and check that a reviewed activity can't be reviewed twice.</p>
+    <div id="batch2Steps"></div>
+  </section>
+
   <footer class="note">
-    Each run creates fresh test accounts using a timestamp, so it's safe to run this repeatedly without hitting duplicate email or handle conflicts. Click any step to see the exact request path and the raw response body.
+    Each run creates fresh test accounts using a timestamp, so it's safe to run this repeatedly without hitting duplicate email or handle conflicts. Click any step to see the exact request path and the raw response body. Click the ↦ button on a step to jump to its request in the right-hand panel.
   </footer>
+
+</div>
+
+<aside class="requests-panel">
+  <div class="requests-panel-header">
+    <h2>Requests sent</h2>
+    <span class="req-count" id="reqCount">0 requests</span>
+  </div>
+  <div class="requests-list" id="requestsList">
+    <p class="req-placeholder" id="reqPlaceholder">Run a test to see the exact JSON request here. Entries stay in run order — scroll to compare any two tests.</p>
+  </div>
+</aside>
 
 </div>
 
@@ -295,9 +469,15 @@
     connIdAB: null,
     connIdAC: null,
     circleConnAB: null,
+    actUserPendingID: null,   // A's activity — approved partway through Batch 2
+    actUserPendingID2: null,  // B's activity — rejected partway through Batch 2
+    actHostID: null,
+    actModID: null,
   };
 
   let passed = 0, failed = 0;
+  let requestCounter = 0;
+  let currentStepMeta = null;
 
   function el(html) {
     const t = document.createElement("template");
@@ -316,6 +496,7 @@
   async function call(method, path, token, body) {
     const headers = { "Content-Type": "application/json" };
     if (token) headers["Authorization"] = "Bearer " + token;
+    logRequest(currentStepMeta, method, path, headers, body);
     let res, text, json = null;
     try {
       res = await fetch(state.baseUrl + path, {
@@ -329,6 +510,66 @@
     } catch (e) {
       return { status: 0, body: null, raw: String(e) };
     }
+  }
+
+  // ---------- requests panel (right side) ----------
+  // Every call() above is logged here as it goes out, in run order, so the
+  // panel always shows the exact JSON request for every test — scroll it
+  // to compare any two tests.
+
+  function logRequest(stepMeta, method, path, headers, body) {
+    requestCounter++;
+    const displayHeaders = Object.assign({}, headers);
+    if (displayHeaders.Authorization) {
+      const token = displayHeaders.Authorization.replace(/^Bearer /, "");
+      displayHeaders.Authorization = "Bearer " + token.slice(0, 12) + "...";
+    }
+    renderRequestEntry({
+      n: requestCounter,
+      stepId: stepMeta ? stepMeta.id : null,
+      title: stepMeta ? stepMeta.title : "(unlabeled request)",
+      method,
+      path,
+      payload: { method, path, headers: displayHeaders, body: body !== undefined ? body : null },
+    });
+  }
+
+  function renderRequestEntry(entry) {
+    const placeholder = document.getElementById("reqPlaceholder");
+    if (placeholder) placeholder.remove();
+
+    const list = document.getElementById("requestsList");
+    const node = el(`
+      <div class="req-entry" id="req-${entry.n}" data-step-id="${entry.stepId || ""}">
+        <div class="req-entry-head">
+          <span class="req-index">#${entry.n}</span>
+          <span class="req-method ${entry.method.toLowerCase()}">${entry.method}</span>
+          <span class="req-path">${entry.path}</span>
+        </div>
+        <div class="req-entry-title">${entry.title}</div>
+        <pre class="req-json"></pre>
+      </div>
+    `);
+    node.querySelector(".req-json").textContent = JSON.stringify(entry.payload, null, 2);
+    list.appendChild(node);
+    document.getElementById("reqCount").textContent = entry.n + (entry.n === 1 ? " request" : " requests");
+    node.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
+  function jumpToRequest(stepId) {
+    const matches = document.querySelectorAll('.req-entry[data-step-id="' + stepId + '"]');
+    if (!matches.length) return;
+    const target = matches[matches.length - 1];
+    target.scrollIntoView({ block: "center", behavior: "smooth" });
+    target.classList.add("highlight");
+    setTimeout(() => target.classList.remove("highlight"), 1200);
+  }
+
+  function clearRequestsPanel() {
+    requestCounter = 0;
+    const list = document.getElementById("requestsList");
+    list.innerHTML = '<p class="req-placeholder" id="reqPlaceholder">Run a test to see the exact JSON request here. Entries stay in run order — scroll to compare any two tests.</p>';
+    document.getElementById("reqCount").textContent = "0 requests";
   }
 
   function u(key) { return state.users[key]; }
@@ -696,6 +937,177 @@
         return { pass: r.status === 200 && !found, raw: r };
       }
     },
+
+    // ---- Batch 2: Activity catalog + moderation ----
+    {
+      id: "act_create_user_a", batch: 2, title: "A (user) creates an activity — starts pending",
+      method: "POST", path: "/activities",
+      run: async () => {
+        const r = await call("POST", "/activities", u("A").token, {
+          title: "Sunset hike " + RUN_ID,
+          description: "A user-submitted activity, awaiting moderator review.",
+        });
+        if (r.status === 201 && r.body) state.actUserPendingID = r.body.ID || r.body.id;
+        return { pass: r.status === 201 && r.body && r.body.Status === "pending", raw: r };
+      }
+    },
+    {
+      id: "act_create_user_b", batch: 2, title: "B (user) creates a second activity — also starts pending",
+      method: "POST", path: "/activities",
+      run: async () => {
+        const r = await call("POST", "/activities", u("B").token, {
+          title: "Board game night " + RUN_ID,
+          description: "A second user-submitted activity — this one will be rejected below.",
+        });
+        if (r.status === 201 && r.body) state.actUserPendingID2 = r.body.ID || r.body.id;
+        return { pass: r.status === 201 && r.body && r.body.Status === "pending", raw: r };
+      }
+    },
+    {
+      id: "act_create_host", batch: 2, title: "Host creates an activity — starts approved",
+      method: "POST", path: "/activities",
+      run: async () => {
+        const r = await call("POST", "/activities", u("HOST").token, {
+          title: "Venue open mic night " + RUN_ID,
+          description: "A host-submitted activity, shown right away.",
+        });
+        if (r.status === 201 && r.body) state.actHostID = r.body.ID || r.body.id;
+        return { pass: r.status === 201 && r.body && r.body.Status === "approved", raw: r };
+      }
+    },
+    {
+      id: "act_create_mod", batch: 2, title: "Moderator creates an activity — starts approved",
+      method: "POST", path: "/activities",
+      run: async () => {
+        const r = await call("POST", "/activities", u("MOD").token, {
+          title: "Neighborhood cleanup " + RUN_ID,
+          description: "A moderator-submitted activity, shown right away.",
+        });
+        if (r.status === 201 && r.body) state.actModID = r.body.ID || r.body.id;
+        return { pass: r.status === 201 && r.body && r.body.Status === "approved", raw: r };
+      }
+    },
+    {
+      id: "act_public_list_excludes_pending", batch: 2, title: "Public list shows the host/moderator activities, not the pending ones",
+      method: "GET", path: "/activities",
+      run: async () => {
+        const r = await call("GET", "/activities", u("A").token, null);
+        const text = r.body ? JSON.stringify(r.body) : "";
+        const ok = r.status === 200
+          && text.includes(state.actHostID)
+          && text.includes(state.actModID)
+          && !text.includes(state.actUserPendingID)
+          && !text.includes(state.actUserPendingID2);
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "act_get_detail", batch: 2, title: "Get one activity by id",
+      method: "GET", path: "/activities/:id",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.actHostID, u("A").token, null);
+        return { pass: r.status === 200 && r.body && (r.body.ID === state.actHostID), raw: r };
+      }
+    },
+    {
+      id: "act_queue_forbidden_for_non_mod", batch: 2, title: "Non-moderator cannot see the moderation queue",
+      method: "GET", path: "/activities/moderation/queue",
+      run: async () => {
+        const r = await call("GET", "/activities/moderation/queue", u("A").token, null);
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+    {
+      id: "act_approve_forbidden_for_non_mod", batch: 2, title: "Non-moderator cannot approve an activity",
+      method: "POST", path: "/activities/:id/approve",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actUserPendingID + "/approve", u("A").token, null);
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+    {
+      id: "act_reject_forbidden_for_non_mod", batch: 2, title: "Non-moderator cannot reject an activity",
+      method: "POST", path: "/activities/:id/reject",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actUserPendingID2 + "/reject", u("A").token, null);
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+    {
+      id: "act_queue_has_both_pending", batch: 2, title: "Moderator's queue shows exactly the two pending activities",
+      method: "GET", path: "/activities/moderation/queue",
+      run: async () => {
+        const r = await call("GET", "/activities/moderation/queue", u("MOD").token, null);
+        const text = r.body ? JSON.stringify(r.body) : "";
+        const ok = r.status === 200
+          && text.includes(state.actUserPendingID)
+          && text.includes(state.actUserPendingID2)
+          && !text.includes(state.actHostID)
+          && !text.includes(state.actModID);
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "act_approve", batch: 2, title: "Moderator approves A's activity",
+      method: "POST", path: "/activities/:id/approve",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actUserPendingID + "/approve", u("MOD").token, null);
+        return { pass: r.status === 200 && r.body && r.body.Status === "approved", raw: r };
+      }
+    },
+    {
+      id: "act_public_list_includes_approved", batch: 2, title: "Public list now includes A's approved activity",
+      method: "GET", path: "/activities",
+      run: async () => {
+        const r = await call("GET", "/activities", u("A").token, null);
+        const found = r.body && JSON.stringify(r.body).includes(state.actUserPendingID);
+        return { pass: r.status === 200 && found, raw: r };
+      }
+    },
+    {
+      id: "act_reject", batch: 2, title: "Moderator rejects B's activity with a reason",
+      method: "POST", path: "/activities/:id/reject",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actUserPendingID2 + "/reject", u("MOD").token, {
+          reason: "duplicate of an existing activity",
+        });
+        return { pass: r.status === 200 && r.body && r.body.Status === "rejected" && r.body.RejectionReason, raw: r };
+      }
+    },
+    {
+      id: "act_public_list_excludes_rejected", batch: 2, title: "Public list still excludes B's rejected activity",
+      method: "GET", path: "/activities",
+      run: async () => {
+        const r = await call("GET", "/activities", u("A").token, null);
+        const found = r.body && JSON.stringify(r.body).includes(state.actUserPendingID2);
+        return { pass: r.status === 200 && !found, raw: r };
+      }
+    },
+    {
+      id: "act_reapprove_conflict", batch: 2, title: "Approving an already-approved activity is rejected",
+      method: "POST", path: "/activities/:id/approve",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actUserPendingID + "/approve", u("MOD").token, null);
+        return { pass: r.status === 409, raw: r };
+      }
+    },
+    {
+      id: "act_rereject_conflict", batch: 2, title: "Rejecting an already-rejected activity is rejected",
+      method: "POST", path: "/activities/:id/reject",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actUserPendingID2 + "/reject", u("MOD").token, null);
+        return { pass: r.status === 409, raw: r };
+      }
+    },
+    {
+      id: "act_get_missing_404", batch: 2, title: "Getting an activity that doesn't exist returns 404",
+      method: "GET", path: "/activities/:id",
+      run: async () => {
+        const fakeId = "00000000-0000-4000-8000-000000000000";
+        const r = await call("GET", "/activities/" + fakeId, u("A").token, null);
+        return { pass: r.status === 404, raw: r };
+      }
+    },
   ];
 
   // ---------- rendering ----------
@@ -703,8 +1115,10 @@
   function renderSteps() {
     const b0 = document.getElementById("batch0Steps");
     const b1 = document.getElementById("batch1Steps");
+    const b2 = document.getElementById("batch2Steps");
     b0.innerHTML = "";
     b1.innerHTML = "";
+    b2.innerHTML = "";
 
     allSteps.forEach((step, idx) => {
       const row = el(`
@@ -713,6 +1127,7 @@
             <div class="step-num">${idx + 1}</div>
             <div class="step-title">${step.title}</div>
             <div class="step-path">${step.method} ${step.path}</div>
+            <button class="jump-btn" data-role="jump" title="Scroll to this request on the right">↦</button>
             <div class="pill idle" data-role="pill">idle</div>
           </div>
           <details class="raw">
@@ -721,7 +1136,9 @@
           </details>
         </div>
       `);
-      (step.batch === 0 ? b0 : b1).appendChild(row);
+      row.querySelector('[data-role="jump"]').addEventListener("click", () => jumpToRequest(step.id));
+      const container = step.batch === 0 ? b0 : step.batch === 1 ? b1 : b2;
+      container.appendChild(row);
     });
   }
 
@@ -742,6 +1159,7 @@
     document.getElementById("runAllBtn").disabled = true;
 
     for (const step of allSteps) {
+      currentStepMeta = step;
       setStepUI(step, "pending", null);
       updateSummary();
       let result;
@@ -764,7 +1182,13 @@
     state.connIdAB = null;
     state.connIdAC = null;
     state.circleConnAB = null;
+    state.actUserPendingID = null;
+    state.actUserPendingID2 = null;
+    state.actHostID = null;
+    state.actModID = null;
     passed = 0; failed = 0;
+    currentStepMeta = null;
+    clearRequestsPanel();
     renderSteps();
     updateSummary();
   }

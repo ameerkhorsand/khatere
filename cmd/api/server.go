@@ -7,6 +7,10 @@ import (
 	"strings"
 	"time"
 
+	activityHTTP "github.com/bLorax/khatere-backend/internal/activity/adapters/http"
+	activityPG "github.com/bLorax/khatere-backend/internal/activity/adapters/postgres"
+	activityApp "github.com/bLorax/khatere-backend/internal/activity/application"
+
 	circleHTTP "github.com/bLorax/khatere-backend/internal/circle/adapters/http"
 	circlePG "github.com/bLorax/khatere-backend/internal/circle/adapters/postgres"
 	circleApp "github.com/bLorax/khatere-backend/internal/circle/application"
@@ -136,6 +140,25 @@ func newRouter(d deps) *gin.Engine {
 	createModeratorProfileUC := moderatorApp.NewCreateModeratorProfileUseCase(moderatorRepo)
 	moderatorHandlers := moderatorHTTP.NewHandlers(createModeratorProfileUC)
 
+	// --- Activity domain wiring ---
+	activityRepo := activityPG.NewActivityRepository(d.pool)
+
+	createActivityUC := activityApp.NewCreateActivityUseCase(activityRepo)
+	getActivityUC := activityApp.NewGetActivityUseCase(activityRepo)
+	listActivitiesUC := activityApp.NewListActivitiesUseCase(activityRepo)
+	listModerationQueueUC := activityApp.NewListModerationQueueUseCase(activityRepo)
+	approveActivityUC := activityApp.NewApproveActivityUseCase(activityRepo)
+	rejectActivityUC := activityApp.NewRejectActivityUseCase(activityRepo)
+
+	activityHandlers := activityHTTP.NewHandlers(
+		createActivityUC,
+		getActivityUC,
+		listActivitiesUC,
+		listModerationQueueUC,
+		approveActivityUC,
+		rejectActivityUC,
+	)
+
 	// --- Router ---
 	router := gin.Default()
 
@@ -203,6 +226,10 @@ func newRouter(d deps) *gin.Engine {
 	circleGroup := router.Group("/circle")
 	circleGroup.Use(authMW)
 	circleHandlers.RegisterRoutes(circleGroup)
+
+	activityGroup := router.Group("/activities")
+	activityGroup.Use(authMW)
+	activityHandlers.RegisterRoutes(activityGroup)
 
 	return router
 }
