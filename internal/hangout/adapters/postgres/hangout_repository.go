@@ -21,7 +21,7 @@ func NewHangoutRepository(pool *pgxpool.Pool) *HangoutRepository {
 }
 
 const hangoutColumns = `
-	id, organizer_id, title, description, status, scheduled_at,
+	id, activity_id, organizer_id, title, description, status, scheduled_at,
 	scheduled_end_at, metadata, version, created_at, updated_at, deleted_at
 `
 
@@ -32,13 +32,34 @@ func (r *HangoutRepository) Create(ctx context.Context, h *domain.Hangout) error
 	}
 	_, err = dbFrom(ctx, r.pool).Exec(ctx, `
 		INSERT INTO hangouts (
-			id, organizer_id, title, description, status, scheduled_at,
+			id, activity_id, organizer_id, title, description, status, scheduled_at,
 			scheduled_end_at, metadata, version, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-	`, h.ID, h.OrganizerID, h.Title, h.Description, h.Status, h.ScheduledAt,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	`, h.ID, h.ActivityID, h.OrganizerID, h.Title, h.Description, h.Status, h.ScheduledAt,
 		h.ScheduledEndAt, meta, h.Version, h.CreatedAt, h.UpdatedAt)
 	return err
+}
+
+// Attended reports whether userID has an accepted invite on a
+// completed hangout linked to activityID. Implements the
+// rating/application.AttendanceChecker interface — see that file
+// for why this query lives here rather than in the rating package.
+func (r *HangoutRepository) Attended(ctx context.Context, activityID, userID uuid.UUID) (bool, error) {
+	var exists bool
+	err := dbFrom(ctx, r.pool).QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM hangouts h
+			JOIN hangout_participants p ON p.hangout_id = h.id
+			WHERE h.activity_id = $1
+			  AND p.user_id = $2
+			  AND h.status = 'completed'
+			  AND p.invite_status = 'accepted'
+			  AND h.deleted_at IS NULL
+		)
+	`, activityID, userID).Scan(&exists)
+	return exists, err
 }
 
 func (r *HangoutRepository) FindByID(ctx context.Context, id uuid.UUID) (*domain.Hangout, error) {
@@ -99,7 +120,7 @@ func (r *HangoutRepository) Update(ctx context.Context, h *domain.Hangout) error
 func scanHangout(row pgx.Row) (*domain.Hangout, error) {
 	var h domain.Hangout
 	var metaBytes []byte
-	err := row.Scan(&h.ID, &h.OrganizerID, &h.Title, &h.Description, &h.Status, &h.ScheduledAt,
+	err := row.Scan(&h.ID, &h.ActivityID, &h.OrganizerID, &h.Title, &h.Description, &h.Status, &h.ScheduledAt,
 		&h.ScheduledEndAt, &metaBytes, &h.Version, &h.CreatedAt, &h.UpdatedAt, &h.DeletedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -118,7 +139,7 @@ func scanHangouts(rows pgx.Rows) ([]domain.Hangout, error) {
 	for rows.Next() {
 		var h domain.Hangout
 		var metaBytes []byte
-		if err := rows.Scan(&h.ID, &h.OrganizerID, &h.Title, &h.Description, &h.Status, &h.ScheduledAt,
+		if err := rows.Scan(&h.ID, &h.ActivityID, &h.OrganizerID, &h.Title, &h.Description, &h.Status, &h.ScheduledAt,
 			&h.ScheduledEndAt, &metaBytes, &h.Version, &h.CreatedAt, &h.UpdatedAt, &h.DeletedAt); err != nil {
 			return nil, err
 		}

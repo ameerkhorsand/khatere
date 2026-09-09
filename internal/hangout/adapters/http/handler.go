@@ -129,6 +129,11 @@ type createHangoutRequest struct {
 	Title       string     `json:"title" binding:"required"`
 	Description *string    `json:"description"`
 	ScheduledAt *time.Time `json:"scheduled_at"`
+	// ActivityID links this hangout to an activity, so a later
+	// completed status lets attendees rate/comment on that
+	// activity (see rating.AttendanceChecker). Nil for a plain
+	// user-organized hangout with no linked activity.
+	ActivityID *uuid.UUID `json:"activity_id"`
 }
 
 func (h *Handlers) CreateHangout(c *gin.Context) {

@@ -20,6 +20,7 @@ func NewCreateHangoutUseCase(hangouts domain.HangoutRepository, participants dom
 
 type CreateHangoutInput struct {
 	OrganizerID uuid.UUID
+	ActivityID  *uuid.UUID // nil for a hangout with no linked activity
 	Title       string
 	Description *string
 	ScheduledAt *time.Time
@@ -33,6 +34,7 @@ func (uc *CreateHangoutUseCase) Execute(ctx context.Context, in CreateHangoutInp
 
 	hangout := &domain.Hangout{
 		ID:          uuid.New(),
+		ActivityID:  in.ActivityID,
 		OrganizerID: in.OrganizerID,
 		Title:       in.Title,
 		Description: in.Description,

@@ -40,6 +40,7 @@ func (s HangoutStatus) IsFinal() bool {
 
 type Hangout struct {
 	ID             uuid.UUID
+	ActivityID     *uuid.UUID // nullable: a user-organized hangout may have no linked activity
 	OrganizerID    uuid.UUID
 	Title          string
 	Description    *string

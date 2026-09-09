@@ -7,6 +7,10 @@ import (
 	"strings"
 	"time"
 
+	commentHTTP "github.com/bLorax/khatere-backend/internal/comment/adapters/http"
+	commentPG "github.com/bLorax/khatere-backend/internal/comment/adapters/postgres"
+	commentApp "github.com/bLorax/khatere-backend/internal/comment/application"
+
 	archivecreator "github.com/bLorax/khatere-backend/internal/hangout/adapters/archive"
 
 	archivegateway "github.com/bLorax/khatere-backend/internal/archive/adapters/hangout"
@@ -18,6 +22,10 @@ import (
 	activityHTTP "github.com/bLorax/khatere-backend/internal/activity/adapters/http"
 	activityPG "github.com/bLorax/khatere-backend/internal/activity/adapters/postgres"
 	activityApp "github.com/bLorax/khatere-backend/internal/activity/application"
+
+	ratingHTTP "github.com/bLorax/khatere-backend/internal/rating/adapters/http"
+	ratingPG "github.com/bLorax/khatere-backend/internal/rating/adapters/postgres"
+	ratingApp "github.com/bLorax/khatere-backend/internal/rating/application"
 
 	hangoutHTTP "github.com/bLorax/khatere-backend/internal/hangout/adapters/http"
 	hangoutNotif "github.com/bLorax/khatere-backend/internal/hangout/adapters/notification"
@@ -181,6 +189,30 @@ func newRouter(d deps) *gin.Engine {
 	pinConfirmationRepo := hangoutPG.NewPinConfirmationRepository(d.pool)
 	hangoutNotifier := hangoutNotif.NewLogNotifier()
 
+	// --- Rating domain wiring ---
+	// hangoutRepo satisfies ratingApp.AttendanceChecker via its
+	// Attended method — see internal/rating/application/create_rating.go.
+	ratingRepo := ratingPG.NewRatingRepository(d.pool)
+	createRatingUC := ratingApp.NewCreateRatingUseCase(ratingRepo, hangoutRepo)
+	getRatingSummaryUC := ratingApp.NewGetRatingSummaryUseCase(ratingRepo)
+	ratingHandlers := ratingHTTP.NewHandlers(createRatingUC, getRatingSummaryUC)
+
+	// --- Comment domain wiring ---
+	commentRepo := commentPG.NewCommentRepository(d.pool)
+	commentVoteRepo := commentPG.NewCommentVoteRepository(d.pool)
+
+	createCommentUC := commentApp.NewCreateCommentUseCase(commentRepo)
+	listCommentsUC := commentApp.NewListCommentsUseCase(commentRepo, commentVoteRepo)
+	voteCommentUC := commentApp.NewVoteCommentUseCase(commentRepo, commentVoteRepo)
+	listCommentModerationUC := commentApp.NewListCommentModerationQueueUseCase(commentRepo)
+	approveCommentUC := commentApp.NewApproveCommentUseCase(commentRepo)
+	rejectCommentUC := commentApp.NewRejectCommentUseCase(commentRepo)
+
+	commentHandlers := commentHTTP.NewHandlers(
+		createCommentUC, listCommentsUC, voteCommentUC,
+		listCommentModerationUC, approveCommentUC, rejectCommentUC,
+	)
+
 	// --- Archive domain wiring ---
 	archiveStore := archivePG.NewStore(d.pool) // implements domain.Transactor
 	archiveRepo := archivePG.NewArchiveRepository(d.pool)
@@ -301,6 +333,19 @@ func newRouter(d deps) *gin.Engine {
 	activityGroup := router.Group("/activities")
 	activityGroup.Use(authMW)
 	activityHandlers.RegisterRoutes(activityGroup)
+
+	// Rating routes nest under /activities/:id — RegisterRoutes reads
+	// :id from this parent group, same as GetActivity does.
+	ratingGroup := activityGroup.Group("/:id")
+	ratingHandlers.RegisterRoutes(ratingGroup)
+
+	commentHandlers.RegisterRoutes(ratingGroup) // reuse activityGroup.Group("/:id")
+
+	commentVoteGroup := router.Group("/comment")
+	commentVoteGroup.Use(authMW)
+	commentHandlers.RegisterVoteRoute(commentVoteGroup)
+
+	commentHandlers.RegisterModerationRoutes(moderatorGroup)
 
 	hangoutGroup := router.Group("/hangouts")
 	hangoutGroup.Use(authMW)
