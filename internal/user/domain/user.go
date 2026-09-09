@@ -17,6 +17,7 @@ type User struct {
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 	DeletedAt         *time.Time
+	Handle            string
 }
 
 func (u *User) IsDeleted() bool {
@@ -36,5 +37,6 @@ type Interest struct {
 var (
 	ErrUserNotFound      = errors.New("user not found")
 	ErrUserAlreadyExists = errors.New("user profile already exists")
+	ErrHandleTaken       = errors.New("handle already taken")
 	ErrVersionConflict   = errors.New("user was modified by another request")
 )

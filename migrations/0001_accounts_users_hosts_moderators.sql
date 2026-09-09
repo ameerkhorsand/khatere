@@ -4,7 +4,7 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;   -- for gen_random_uuid()
 CREATE EXTENSION IF NOT EXISTS citext;     -- for case-insensitive email
 
--- Reusable trigger function: bumps updated_at and version on every row update.
+-- +migrate StatementBegin
 CREATE OR REPLACE FUNCTION set_updated_at_and_bump_version()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -13,6 +13,7 @@ BEGIN
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+-- +migrate StatementEnd
 
 -- ============================================================
 -- accounts: shared identity/auth. One row per login credential.

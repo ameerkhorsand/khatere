@@ -1,0 +1,780 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Khatere API Console</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #171a22;
+    --raised: #1d2130;
+    --border: #2a2f3f;
+    --text: #e4e7ee;
+    --muted: #8890a4;
+    --pass: #52d69b;
+    --fail: #ff6d6d;
+    --pending: #eab34c;
+    --idle: #4a5064;
+    --rail-a: #6c8cff;
+    --rail-b: #b389f5;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.5;
+  }
+
+  .wrap {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 28px 20px 80px;
+  }
+
+  header.page {
+    margin-bottom: 22px;
+  }
+
+  header.page h1 {
+    font-size: 22px;
+    font-weight: 650;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+
+  header.page p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 14px;
+    max-width: 62ch;
+  }
+
+  .controls {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: rgba(15, 17, 23, 0.92);
+    backdrop-filter: blur(6px);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 26px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .controls label {
+    font-size: 12px;
+    color: var(--muted);
+    margin-right: 6px;
+  }
+
+  .controls input[type="text"] {
+    background: var(--raised);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    width: 260px;
+  }
+
+  .controls input[type="text"]:focus {
+    outline: 2px solid var(--rail-a);
+    outline-offset: 1px;
+  }
+
+  button {
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 600;
+    border: 1px solid var(--border);
+    background: var(--raised);
+    color: var(--text);
+    padding: 8px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  button:hover { border-color: var(--rail-a); }
+  button:focus-visible { outline: 2px solid var(--rail-a); outline-offset: 1px; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  button.primary {
+    background: var(--rail-a);
+    border-color: var(--rail-a);
+    color: #0a0c12;
+  }
+
+  .summary {
+    margin-left: auto;
+    display: flex;
+    gap: 14px;
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+
+  .summary span.pass { color: var(--pass); }
+  .summary span.fail { color: var(--fail); }
+  .summary span.pending { color: var(--pending); }
+
+  section.batch {
+    border-left: 3px solid var(--rail-a);
+    padding-left: 18px;
+    margin-bottom: 34px;
+  }
+
+  section.batch.b1 { border-left-color: var(--rail-b); }
+
+  section.batch h2 {
+    font-size: 15px;
+    font-weight: 650;
+    margin: 0 0 3px;
+  }
+
+  section.batch p.sub {
+    margin: 0 0 14px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .step {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    overflow: hidden;
+  }
+
+  .step-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  .step-num {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    width: 22px;
+    flex: none;
+    text-align: right;
+  }
+
+  .step-title {
+    font-size: 13.5px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .step-path {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .pill {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 20px;
+    flex: none;
+    min-width: 62px;
+    text-align: center;
+  }
+
+  .pill.idle { color: var(--idle); background: rgba(74, 80, 100, 0.15); }
+  .pill.pending { color: var(--pending); background: rgba(234, 179, 76, 0.14); }
+  .pill.pass { color: var(--pass); background: rgba(82, 214, 155, 0.14); }
+  .pill.fail { color: var(--fail); background: rgba(255, 109, 109, 0.14); }
+
+  details.raw {
+    border-top: 1px solid var(--border);
+  }
+
+  details.raw summary {
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--muted);
+    padding: 7px 12px;
+    user-select: none;
+  }
+
+  details.raw summary:hover { color: var(--text); }
+
+  details.raw pre {
+    margin: 0;
+    padding: 10px 12px 14px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: var(--raised);
+    max-height: 220px;
+    overflow: auto;
+  }
+
+  footer.note {
+    margin-top: 30px;
+    font-size: 12px;
+    color: var(--muted);
+    border-top: 1px solid var(--border);
+    padding-top: 14px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="page">
+    <h1>Khatere API console</h1>
+    <p>Runs every endpoint built so far — auth, user profiles, interests, host, moderator, and the circle domain — against a live API and shows the real request path and response for each step.</p>
+  </header>
+
+  <div class="controls">
+    <div>
+      <label for="baseUrl">Base URL</label>
+      <input type="text" id="baseUrl" value="http://localhost:8080" />
+    </div>
+    <button class="primary" id="runAllBtn">Run all</button>
+    <button id="resetBtn">Reset</button>
+    <div class="summary">
+      <span class="pass" id="passCount">0 passed</span>
+      <span class="fail" id="failCount">0 failed</span>
+      <span class="pending" id="pendingCount">0 pending</span>
+    </div>
+  </div>
+
+  <section class="batch b0">
+    <h2>Batch 0 — Foundations</h2>
+    <p class="sub">Health check, registration, login, refresh tokens, user profiles and interests, host and moderator accounts.</p>
+    <div id="batch0Steps"></div>
+  </section>
+
+  <section class="batch b1">
+    <h2>Batch 1 — Circle</h2>
+    <p class="sub">Connection requests, accept/decline, blocks, and severing — including the guards and the block-deletes-connection database trigger.</p>
+    <div id="batch1Steps"></div>
+  </section>
+
+  <footer class="note">
+    Each run creates fresh test accounts using a timestamp, so it's safe to run this repeatedly without hitting duplicate email or handle conflicts. Click any step to see the exact request path and the raw response body.
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const RUN_ID = Date.now();
+  const state = {
+    baseUrl: "",
+    users: {},   // key -> { email, password, token, refreshToken, accountId, handle }
+    catalog: [],
+    connIdAB: null,
+    connIdAC: null,
+    circleConnAB: null,
+  };
+
+  let passed = 0, failed = 0;
+
+  function el(html) {
+    const t = document.createElement("template");
+    t.innerHTML = html.trim();
+    return t.content.firstElementChild;
+  }
+
+  function updateSummary() {
+    document.getElementById("passCount").textContent = passed + " passed";
+    document.getElementById("failCount").textContent = failed + " failed";
+    const total = allSteps.length;
+    const pending = total - passed - failed;
+    document.getElementById("pendingCount").textContent = pending + " pending";
+  }
+
+  async function call(method, path, token, body) {
+    const headers = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = "Bearer " + token;
+    let res, text, json = null;
+    try {
+      res = await fetch(state.baseUrl + path, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      text = await res.text();
+      try { json = text ? JSON.parse(text) : null; } catch (e) { /* not json */ }
+      return { status: res.status, body: json, raw: text };
+    } catch (e) {
+      return { status: 0, body: null, raw: String(e) };
+    }
+  }
+
+  function u(key) { return state.users[key]; }
+
+  function setUser(key, patch) {
+    state.users[key] = Object.assign(state.users[key] || {}, patch);
+  }
+
+  // ---------- step definitions ----------
+  // each step: { id, batch, title, run: async (row) => ({pass, statusLabel, raw}) }
+
+  function makeAccount(key, prefix, accountType) {
+    return {
+      id: "register_" + key,
+      batch: 0,
+      title: "Register " + prefix + " (" + accountType + ")",
+      method: "POST", path: "/auth/register",
+      run: async () => {
+        const email = prefix.toLowerCase() + "_" + RUN_ID + "@example.com";
+        const password = "testpass123";
+        const r = await call("POST", "/auth/register", null, { email, password, account_type: accountType });
+        setUser(key, { email, password, accountType });
+        return { pass: r.status === 201, raw: r };
+      }
+    };
+  }
+
+  function loginStep(key, prefix) {
+    return {
+      id: "login_" + key,
+      batch: 0,
+      title: "Log in as " + prefix,
+      method: "POST", path: "/auth/login",
+      run: async () => {
+        const usr = u(key);
+        const r = await call("POST", "/auth/login", null, { email: usr.email, password: usr.password });
+        if (r.status === 200 && r.body) {
+          setUser(key, { token: r.body.access_token, refreshToken: r.body.refresh_token });
+        }
+        return { pass: r.status === 200, raw: r };
+      }
+    };
+  }
+
+  function profileStep(key, prefix, handlePrefix) {
+    return {
+      id: "profile_" + key,
+      batch: 0,
+      title: "Create user profile for " + prefix,
+      method: "POST", path: "/user/profile",
+      run: async () => {
+        const usr = u(key);
+        const handle = handlePrefix + "_" + RUN_ID;
+        const r = await call("POST", "/user/profile", usr.token, {
+          display_name: prefix,
+          handle,
+          bio: "console test user " + prefix,
+        });
+        if (r.status === 201 && r.body) {
+          setUser(key, { accountId: r.body.AccountID, handle });
+        }
+        return { pass: r.status === 201, raw: r };
+      }
+    };
+  }
+
+  const allSteps = [
+    // ---- Batch 0: health + guard ----
+    {
+      id: "health", batch: 0, title: "Health check",
+      method: "GET", path: "/health",
+      run: async () => {
+        const r = await call("GET", "/health", null, null);
+        return { pass: r.status === 200, raw: r };
+      }
+    },
+    {
+      id: "auth_guard", batch: 0, title: "Protected route rejects missing token",
+      method: "GET", path: "/circle",
+      run: async () => {
+        const r = await call("GET", "/circle", null, null);
+        return { pass: r.status === 401, raw: r };
+      }
+    },
+
+    // ---- Batch 0: accounts ----
+    makeAccount("A", "circle_a", "user"),
+    makeAccount("B", "circle_b", "user"),
+    makeAccount("C", "circle_c", "user"),
+    makeAccount("HOST", "circle_host", "host"),
+    makeAccount("MOD", "circle_mod", "moderator"),
+
+    loginStep("A", "A"),
+    loginStep("B", "B"),
+    loginStep("C", "C"),
+    loginStep("HOST", "Host"),
+    loginStep("MOD", "Moderator"),
+
+    profileStep("A", "Circle A", "circlea"),
+    profileStep("B", "Circle B", "circleb"),
+    profileStep("C", "Circle C", "circlec"),
+
+    {
+      id: "update_profile_a", batch: 0, title: "Update A's profile bio",
+      method: "PATCH", path: "/user/profile",
+      run: async () => {
+        const r = await call("PATCH", "/user/profile", u("A").token, { bio: "updated via console" });
+        return { pass: r.status === 200, raw: r };
+      }
+    },
+    {
+      id: "interest_catalog", batch: 0, title: "List interest catalog",
+      method: "GET", path: "/user/interests/catalog",
+      run: async () => {
+        const r = await call("GET", "/user/interests/catalog", u("A").token, null);
+        if (r.status === 200 && Array.isArray(r.body)) state.catalog = r.body;
+        return { pass: r.status === 200 && Array.isArray(r.body) && r.body.length > 0, raw: r };
+      }
+    },
+    {
+      id: "set_interests", batch: 0, title: "Set A's interests from the catalog",
+      method: "PUT", path: "/user/interests",
+      run: async () => {
+        const ids = state.catalog.slice(0, 2).map(i => i.ID || i.id);
+        const r = await call("PUT", "/user/interests", u("A").token, { interest_ids: ids });
+        return { pass: r.status === 200, raw: r };
+      }
+    },
+    {
+      id: "list_interests", batch: 0, title: "List A's own interests",
+      method: "GET", path: "/user/interests",
+      run: async () => {
+        const r = await call("GET", "/user/interests", u("A").token, null);
+        return { pass: r.status === 200 && Array.isArray(r.body), raw: r };
+      }
+    },
+    {
+      id: "refresh_a", batch: 0, title: "Refresh A's access token",
+      method: "POST", path: "/auth/refresh",
+      run: async () => {
+        const r = await call("POST", "/auth/refresh", null, { refresh_token: u("A").refreshToken });
+        if (r.status === 200 && r.body) setUser("A", { token: r.body.access_token, refreshToken: r.body.refresh_token });
+        return { pass: r.status === 200, raw: r };
+      }
+    },
+    {
+      id: "host_profile", batch: 0, title: "Create host profile",
+      method: "POST", path: "/host/profile",
+      run: async () => {
+        const r = await call("POST", "/host/profile", u("HOST").token, {
+          business_name: "Console Test Venue " + RUN_ID,
+          location_info: "123 Test Street",
+        });
+        return { pass: r.status === 201, raw: r };
+      }
+    },
+    {
+      id: "moderator_profile", batch: 0, title: "Create moderator profile",
+      method: "POST", path: "/moderator/profile",
+      run: async () => {
+        const r = await call("POST", "/moderator/profile", u("MOD").token, {});
+        return { pass: r.status === 201, raw: r };
+      }
+    },
+
+    // ---- Batch 1: circle ----
+    {
+      id: "self_connect", batch: 1, title: "A cannot send a connection request to self",
+      method: "POST", path: "/circle/requests",
+      run: async () => {
+        const r = await call("POST", "/circle/requests", u("A").token, { user_id: u("A").accountId });
+        return { pass: r.status === 400, raw: r };
+      }
+    },
+    {
+      id: "self_block", batch: 1, title: "A cannot block self",
+      method: "POST", path: "/circle/blocks",
+      run: async () => {
+        const r = await call("POST", "/circle/blocks", u("A").token, { user_id: u("A").accountId });
+        return { pass: r.status === 400, raw: r };
+      }
+    },
+    {
+      id: "send_ab", batch: 1, title: "A sends a connection request to B by handle",
+      method: "POST", path: "/circle/requests",
+      run: async () => {
+        const r = await call("POST", "/circle/requests", u("A").token, { handle: u("B").handle });
+        if (r.status === 201 && r.body) state.connIdAB = r.body.ID || r.body.id;
+        return { pass: r.status === 201, raw: r };
+      }
+    },
+    {
+      id: "dup_ab", batch: 1, title: "Duplicate request A to B is rejected",
+      method: "POST", path: "/circle/requests",
+      run: async () => {
+        const r = await call("POST", "/circle/requests", u("A").token, { user_id: u("B").accountId });
+        return { pass: r.status === 409, raw: r };
+      }
+    },
+    {
+      id: "b_incoming", batch: 1, title: "B sees the incoming request from A",
+      method: "GET", path: "/circle/requests/incoming",
+      run: async () => {
+        const r = await call("GET", "/circle/requests/incoming", u("B").token, null);
+        const found = r.body && JSON.stringify(r.body).includes(u("A").accountId);
+        return { pass: r.status === 200 && found, raw: r };
+      }
+    },
+    {
+      id: "a_outgoing", batch: 1, title: "A sees the outgoing request to B",
+      method: "GET", path: "/circle/requests/outgoing",
+      run: async () => {
+        const r = await call("GET", "/circle/requests/outgoing", u("A").token, null);
+        const found = r.body && JSON.stringify(r.body).includes(u("B").accountId);
+        return { pass: r.status === 200 && found, raw: r };
+      }
+    },
+    {
+      id: "accept_ab", batch: 1, title: "B accepts A's request",
+      method: "POST", path: "/circle/requests/:id/accept",
+      run: async () => {
+        const r = await call("POST", "/circle/requests/" + state.connIdAB + "/accept", u("B").token, null);
+        return { pass: r.status === 200, raw: r };
+      }
+    },
+    {
+      id: "a_circle_has_b", batch: 1, title: "A's circle now contains B",
+      method: "GET", path: "/circle",
+      run: async () => {
+        const r = await call("GET", "/circle", u("A").token, null);
+        const found = r.body && JSON.stringify(r.body).includes(u("B").accountId);
+        if (found) {
+          const match = r.body.find(c => c.AddresseeID === u("B").accountId || c.RequesterID === u("B").accountId);
+          if (match) state.circleConnAB = match.ID || match.id;
+        }
+        return { pass: r.status === 200 && found, raw: r };
+      }
+    },
+    {
+      id: "b_circle_has_a", batch: 1, title: "B's circle now contains A",
+      method: "GET", path: "/circle",
+      run: async () => {
+        const r = await call("GET", "/circle", u("B").token, null);
+        const found = r.body && JSON.stringify(r.body).includes(u("A").accountId);
+        return { pass: r.status === 200 && found, raw: r };
+      }
+    },
+    {
+      id: "send_ac", batch: 1, title: "A sends a connection request to C",
+      method: "POST", path: "/circle/requests",
+      run: async () => {
+        const r = await call("POST", "/circle/requests", u("A").token, { user_id: u("C").accountId });
+        if (r.status === 201 && r.body) state.connIdAC = r.body.ID || r.body.id;
+        return { pass: r.status === 201, raw: r };
+      }
+    },
+    {
+      id: "decline_ac", batch: 1, title: "C declines A's request",
+      method: "POST", path: "/circle/requests/:id/decline",
+      run: async () => {
+        const r = await call("POST", "/circle/requests/" + state.connIdAC + "/decline", u("C").token, null);
+        return { pass: r.status === 204, raw: r };
+      }
+    },
+    {
+      id: "outgoing_clear_after_decline", batch: 1, title: "A's outgoing list no longer shows C",
+      method: "GET", path: "/circle/requests/outgoing",
+      run: async () => {
+        const r = await call("GET", "/circle/requests/outgoing", u("A").token, null);
+        const found = r.body && JSON.stringify(r.body).includes(u("C").accountId);
+        return { pass: r.status === 200 && !found, raw: r };
+      }
+    },
+    {
+      id: "resend_ac", batch: 1, title: "A can send a fresh request to C after decline",
+      method: "POST", path: "/circle/requests",
+      run: async () => {
+        const r = await call("POST", "/circle/requests", u("A").token, { user_id: u("C").accountId });
+        return { pass: r.status === 201, raw: r };
+      }
+    },
+    {
+      id: "block_c", batch: 1, title: "A blocks C (deletes the pending request via DB trigger)",
+      method: "POST", path: "/circle/blocks",
+      run: async () => {
+        const r = await call("POST", "/circle/blocks", u("A").token, { user_id: u("C").accountId });
+        return { pass: r.status === 201, raw: r };
+      }
+    },
+    {
+      id: "outgoing_clear_after_block", batch: 1, title: "A's outgoing requests no longer show C after block",
+      method: "GET", path: "/circle/requests/outgoing",
+      run: async () => {
+        const r = await call("GET", "/circle/requests/outgoing", u("A").token, null);
+        const found = r.body && JSON.stringify(r.body).includes(u("C").accountId);
+        return { pass: r.status === 200 && !found, raw: r };
+      }
+    },
+    {
+      id: "blocks_list_has_c", batch: 1, title: "A's block list contains C",
+      method: "GET", path: "/circle/blocks",
+      run: async () => {
+        const r = await call("GET", "/circle/blocks", u("A").token, null);
+        const found = r.body && JSON.stringify(r.body).includes(u("C").accountId);
+        return { pass: r.status === 200 && found, raw: r };
+      }
+    },
+    {
+      id: "c_blocked_cannot_request", batch: 1, title: "C cannot send a new request to A while blocked",
+      method: "POST", path: "/circle/requests",
+      run: async () => {
+        const r = await call("POST", "/circle/requests", u("C").token, { user_id: u("A").accountId });
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+    {
+      id: "unblock_c", batch: 1, title: "A unblocks C",
+      method: "DELETE", path: "/circle/blocks/:userID",
+      run: async () => {
+        const r = await call("DELETE", "/circle/blocks/" + u("C").accountId, u("A").token, null);
+        return { pass: r.status === 204, raw: r };
+      }
+    },
+    {
+      id: "blocks_list_clear", batch: 1, title: "A's block list no longer contains C",
+      method: "GET", path: "/circle/blocks",
+      run: async () => {
+        const r = await call("GET", "/circle/blocks", u("A").token, null);
+        const found = r.body && JSON.stringify(r.body).includes(u("C").accountId);
+        return { pass: r.status === 200 && !found, raw: r };
+      }
+    },
+    {
+      id: "c_can_request_after_unblock", batch: 1, title: "C can send a request to A again after unblock",
+      method: "POST", path: "/circle/requests",
+      run: async () => {
+        const r = await call("POST", "/circle/requests", u("C").token, { user_id: u("A").accountId });
+        return { pass: r.status === 201, raw: r };
+      }
+    },
+    {
+      id: "sever_ab", batch: 1, title: "A severs the accepted connection with B",
+      method: "DELETE", path: "/circle/connections/:id",
+      run: async () => {
+        if (!state.circleConnAB) return { pass: false, raw: { status: 0, raw: "no connection id captured" } };
+        const r = await call("DELETE", "/circle/connections/" + state.circleConnAB, u("A").token, null);
+        return { pass: r.status === 204, raw: r };
+      }
+    },
+    {
+      id: "circle_clear_a", batch: 1, title: "A's circle no longer contains B after sever",
+      method: "GET", path: "/circle",
+      run: async () => {
+        const r = await call("GET", "/circle", u("A").token, null);
+        const found = r.body && JSON.stringify(r.body).includes(u("B").accountId);
+        return { pass: r.status === 200 && !found, raw: r };
+      }
+    },
+    {
+      id: "circle_clear_b", batch: 1, title: "B's circle no longer contains A after sever",
+      method: "GET", path: "/circle",
+      run: async () => {
+        const r = await call("GET", "/circle", u("B").token, null);
+        const found = r.body && JSON.stringify(r.body).includes(u("A").accountId);
+        return { pass: r.status === 200 && !found, raw: r };
+      }
+    },
+  ];
+
+  // ---------- rendering ----------
+
+  function renderSteps() {
+    const b0 = document.getElementById("batch0Steps");
+    const b1 = document.getElementById("batch1Steps");
+    b0.innerHTML = "";
+    b1.innerHTML = "";
+
+    allSteps.forEach((step, idx) => {
+      const row = el(`
+        <div class="step" id="step-${step.id}">
+          <div class="step-row">
+            <div class="step-num">${idx + 1}</div>
+            <div class="step-title">${step.title}</div>
+            <div class="step-path">${step.method} ${step.path}</div>
+            <div class="pill idle" data-role="pill">idle</div>
+          </div>
+          <details class="raw">
+            <summary>response</summary>
+            <pre data-role="raw">not run yet</pre>
+          </details>
+        </div>
+      `);
+      (step.batch === 0 ? b0 : b1).appendChild(row);
+    });
+  }
+
+  function setStepUI(step, statusLabel, raw) {
+    const rowEl = document.getElementById("step-" + step.id);
+    const pill = rowEl.querySelector('[data-role="pill"]');
+    const pre = rowEl.querySelector('[data-role="raw"]');
+    pill.className = "pill " + statusLabel;
+    pill.textContent = statusLabel === "pass" ? "pass" : statusLabel === "fail" ? "fail" : statusLabel === "pending" ? "running" : "idle";
+    if (raw) {
+      pre.textContent = JSON.stringify({ status: raw.status, body: raw.body !== undefined ? raw.body : raw.raw }, null, 2);
+    }
+  }
+
+  async function runAll() {
+    state.baseUrl = document.getElementById("baseUrl").value.replace(/\/$/, "");
+    passed = 0; failed = 0;
+    document.getElementById("runAllBtn").disabled = true;
+
+    for (const step of allSteps) {
+      setStepUI(step, "pending", null);
+      updateSummary();
+      let result;
+      try {
+        result = await step.run();
+      } catch (e) {
+        result = { pass: false, raw: { status: 0, raw: String(e) } };
+      }
+      if (result.pass) { passed++; setStepUI(step, "pass", result.raw); }
+      else { failed++; setStepUI(step, "fail", result.raw); }
+      updateSummary();
+    }
+
+    document.getElementById("runAllBtn").disabled = false;
+  }
+
+  function reset() {
+    state.users = {};
+    state.catalog = [];
+    state.connIdAB = null;
+    state.connIdAC = null;
+    state.circleConnAB = null;
+    passed = 0; failed = 0;
+    renderSteps();
+    updateSummary();
+  }
+
+  document.getElementById("runAllBtn").addEventListener("click", runAll);
+  document.getElementById("resetBtn").addEventListener("click", reset);
+
+  renderSteps();
+  updateSummary();
+})();
+</script>
+</body>
+</html>

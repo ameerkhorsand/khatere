@@ -1,4 +1,4 @@
 development:
   dialect: postgres
-  datasource: "host=localhost port=5432 user=postgres password=SeTTm7C4VLhtL9ZLJ5g85+hM7MAWM8IS dbname=khatere sslmode=disable"
+  datasource: "host=localhost port=5432 user=khatere password=SeTTm7C4VLhtL9ZLJ5g85+hM7MAWM8IS dbname=khatere sslmode=disable"
   dir: migrations

@@ -19,6 +19,7 @@ func NewCreateProfileUseCase(users domain.UserRepository) *CreateProfileUseCase 
 type CreateProfileInput struct {
 	AccountID   uuid.UUID
 	DisplayName string
+	Handle      string
 	Bio         *string
 }
 
@@ -34,6 +35,7 @@ func (uc *CreateProfileUseCase) Execute(ctx context.Context, in CreateProfileInp
 	user := &domain.User{
 		AccountID:   in.AccountID,
 		DisplayName: in.DisplayName,
+		Handle:      in.Handle,
 		Bio:         in.Bio,
 		Metadata:    map[string]any{},
 		Version:     1,

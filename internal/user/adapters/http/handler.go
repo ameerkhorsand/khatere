@@ -47,6 +47,7 @@ func accountIDFromContext(c *gin.Context) (uuid.UUID, error) {
 
 type createProfileRequest struct {
 	DisplayName string  `json:"display_name" binding:"required"`
+	Handle      string  `json:"handle" binding:"required"`
 	Bio         *string `json:"bio"`
 }
 
@@ -66,14 +67,18 @@ func (h *Handlers) CreateProfile(c *gin.Context) {
 	user, err := h.createProfile.Execute(c.Request.Context(), application.CreateProfileInput{
 		AccountID:   accountID,
 		DisplayName: req.DisplayName,
+		Handle:      req.Handle,
 		Bio:         req.Bio,
 	})
 	if err != nil {
-		if errors.Is(err, domain.ErrUserAlreadyExists) {
+		switch {
+		case errors.Is(err, domain.ErrUserAlreadyExists):
 			c.JSON(http.StatusConflict, gin.H{"error": "profile already exists"})
-			return
+		case errors.Is(err, domain.ErrHandleTaken):
+			c.JSON(http.StatusConflict, gin.H{"error": "handle already taken"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
 

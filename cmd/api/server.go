@@ -2,8 +2,14 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"net/http"
+	"strings"
 	"time"
+
+	circleHTTP "github.com/bLorax/khatere-backend/internal/circle/adapters/http"
+	circlePG "github.com/bLorax/khatere-backend/internal/circle/adapters/postgres"
+	circleApp "github.com/bLorax/khatere-backend/internal/circle/application"
 
 	authHTTP "github.com/bLorax/khatere-backend/internal/auth/adapters/http"
 	authPG "github.com/bLorax/khatere-backend/internal/auth/adapters/postgres"
@@ -27,11 +33,15 @@ import (
 	rediscl "github.com/bLorax/khatere-backend/internal/platform/redis"
 	"github.com/bLorax/khatere-backend/internal/platform/security"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	miniogo "github.com/minio/minio-go/v7"
 	goredis "github.com/redis/go-redis/v9"
 )
+
+//go:embed web/khatere-api-tester.html
+var apiTesterHTML []byte
 
 // deps bundles the already-connected infrastructure clients that the
 // router needs. main.go builds this after it has pinged everything.
@@ -72,6 +82,50 @@ func newRouter(d deps) *gin.Engine {
 
 	userHandlers := userHTTP.NewHandlers(createProfileUC, updateProfileUC, setInterestsUC, listInterestsUC, listCatalogUC)
 
+	// --- Circle domain wiring ---
+	connectionRepo := circlePG.NewConnectionRepository(d.pool)
+	blockRepo := circlePG.NewBlockRepository(d.pool)
+
+	sendConnectionRequestUC := circleApp.NewSendConnectionRequestUseCase(
+		connectionRepo,
+		blockRepo,
+	)
+	acceptConnectionRequestUC := circleApp.NewAcceptConnectionRequestUseCase(
+		connectionRepo,
+		blockRepo,
+	)
+	declineConnectionRequestUC := circleApp.NewDeclineConnectionRequestUseCase(
+		connectionRepo,
+	)
+	severConnectionUC := circleApp.NewSeverConnectionUseCase(
+		connectionRepo,
+	)
+	blockUserUC := circleApp.NewBlockUserUseCase(
+		blockRepo,
+	)
+	unblockUserUC := circleApp.NewUnblockUserUseCase(
+		blockRepo,
+	)
+	listCircleUC := circleApp.NewListCircleUseCase(
+		connectionRepo,
+	)
+	listPendingRequestsUC := circleApp.NewListPendingRequestsUseCase(
+		connectionRepo,
+	)
+
+	circleHandlers := circleHTTP.NewHandlers(
+		sendConnectionRequestUC,
+		acceptConnectionRequestUC,
+		declineConnectionRequestUC,
+		severConnectionUC,
+		blockUserUC,
+		unblockUserUC,
+		listCircleUC,
+		listPendingRequestsUC,
+		blockRepo,
+		userRepo,
+	)
+
 	// --- Host domain wiring ---
 	hostRepo := hostPG.NewHostRepository(d.pool)
 	createHostProfileUC := hostApp.NewCreateHostProfileUseCase(hostRepo)
@@ -84,6 +138,45 @@ func newRouter(d deps) *gin.Engine {
 
 	// --- Router ---
 	router := gin.Default()
+
+	router.Use(cors.New(cors.Config{
+		AllowOriginFunc: func(origin string) bool {
+			// Local development / testing — any loopback address, any port.
+			// Covers `python -m http.server` regardless of whether it
+			// prints localhost, 127.0.0.1, or 0.0.0.0 in your browser bar.
+			if strings.HasPrefix(origin, "http://localhost:") ||
+				strings.HasPrefix(origin, "http://127.0.0.1:") ||
+				strings.HasPrefix(origin, "http://0.0.0.0:") {
+				return true
+			}
+
+			// Real, named origins — your frontend engineer's actual
+			// deployed frontend and their local dev server, once known.
+			allowed := map[string]bool{
+				"https://app.yourdomain.com": true,
+				// add their dev server origin here once they give it to you,
+				// e.g. "http://localhost:5173" is already covered above,
+				// but if they deploy a staging frontend, list its exact origin:
+				// "https://staging.yourdomain.com": true,
+			}
+			return allowed[origin]
+		},
+		AllowMethods: []string{
+			"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS",
+		},
+		AllowHeaders: []string{
+			"Origin", "Content-Type", "Authorization",
+		},
+		AllowCredentials: true,
+	}))
+
+	router.GET("/tester", func(c *gin.Context) {
+		c.Data(
+			http.StatusOK,
+			"text/html; charset=utf-8",
+			apiTesterHTML,
+		)
+	})
 
 	router.GET("/health", func(c *gin.Context) {
 		reqCtx := c.Request.Context()
@@ -106,6 +199,10 @@ func newRouter(d deps) *gin.Engine {
 	moderatorGroup := router.Group("/moderator")
 	moderatorGroup.Use(authMW)
 	moderatorHandlers.RegisterRoutes(moderatorGroup)
+
+	circleGroup := router.Group("/circle")
+	circleGroup.Use(authMW)
+	circleHandlers.RegisterRoutes(circleGroup)
 
 	return router
 }
