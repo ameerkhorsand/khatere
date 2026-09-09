@@ -22,7 +22,7 @@ func NewHangoutRepository(pool *pgxpool.Pool) *HangoutRepository {
 
 const hangoutColumns = `
 	id, organizer_id, title, description, status, scheduled_at,
-	metadata, version, created_at, updated_at, deleted_at
+	scheduled_end_at, metadata, version, created_at, updated_at, deleted_at
 `
 
 func (r *HangoutRepository) Create(ctx context.Context, h *domain.Hangout) error {
@@ -33,11 +33,11 @@ func (r *HangoutRepository) Create(ctx context.Context, h *domain.Hangout) error
 	_, err = dbFrom(ctx, r.pool).Exec(ctx, `
 		INSERT INTO hangouts (
 			id, organizer_id, title, description, status, scheduled_at,
-			metadata, version, created_at, updated_at
+			scheduled_end_at, metadata, version, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`, h.ID, h.OrganizerID, h.Title, h.Description, h.Status, h.ScheduledAt,
-		meta, h.Version, h.CreatedAt, h.UpdatedAt)
+		h.ScheduledEndAt, meta, h.Version, h.CreatedAt, h.UpdatedAt)
 	return err
 }
 
@@ -83,9 +83,10 @@ func (r *HangoutRepository) Update(ctx context.Context, h *domain.Hangout) error
 	tag, err := dbFrom(ctx, r.pool).Exec(ctx, `
 		UPDATE hangouts
 		SET title = $1, description = $2, status = $3, scheduled_at = $4,
-		    metadata = $5, deleted_at = $6
-		WHERE id = $7 AND version = $8
-	`, h.Title, h.Description, h.Status, h.ScheduledAt, meta, h.DeletedAt, h.ID, h.Version)
+		    scheduled_end_at = $5, metadata = $6, deleted_at = $7
+		WHERE id = $8 AND version = $9
+	`, h.Title, h.Description, h.Status, h.ScheduledAt, h.ScheduledEndAt,
+		meta, h.DeletedAt, h.ID, h.Version)
 	if err != nil {
 		return err
 	}
@@ -99,7 +100,7 @@ func scanHangout(row pgx.Row) (*domain.Hangout, error) {
 	var h domain.Hangout
 	var metaBytes []byte
 	err := row.Scan(&h.ID, &h.OrganizerID, &h.Title, &h.Description, &h.Status, &h.ScheduledAt,
-		&metaBytes, &h.Version, &h.CreatedAt, &h.UpdatedAt, &h.DeletedAt)
+		&h.ScheduledEndAt, &metaBytes, &h.Version, &h.CreatedAt, &h.UpdatedAt, &h.DeletedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrHangoutNotFound
@@ -118,7 +119,7 @@ func scanHangouts(rows pgx.Rows) ([]domain.Hangout, error) {
 		var h domain.Hangout
 		var metaBytes []byte
 		if err := rows.Scan(&h.ID, &h.OrganizerID, &h.Title, &h.Description, &h.Status, &h.ScheduledAt,
-			&metaBytes, &h.Version, &h.CreatedAt, &h.UpdatedAt, &h.DeletedAt); err != nil {
+			&h.ScheduledEndAt, &metaBytes, &h.Version, &h.CreatedAt, &h.UpdatedAt, &h.DeletedAt); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(metaBytes, &h.Metadata); err != nil {

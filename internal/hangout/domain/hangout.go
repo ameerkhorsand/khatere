@@ -39,17 +39,18 @@ func (s HangoutStatus) IsFinal() bool {
 }
 
 type Hangout struct {
-	ID          uuid.UUID
-	OrganizerID uuid.UUID
-	Title       string
-	Description *string
-	Status      HangoutStatus
-	ScheduledAt *time.Time
-	Metadata    map[string]any
-	Version     int
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	DeletedAt   *time.Time
+	ID             uuid.UUID
+	OrganizerID    uuid.UUID
+	Title          string
+	Description    *string
+	Status         HangoutStatus
+	ScheduledAt    *time.Time
+	ScheduledEndAt *time.Time // nullable: only known hangouts with a fixed end time
+	Metadata       map[string]any
+	Version        int
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	DeletedAt      *time.Time
 }
 
 func (h *Hangout) IsDeleted() bool {

@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"log"
 
 	"github.com/bLorax/khatere-backend/internal/hangout/domain"
 	"github.com/google/uuid"
@@ -13,11 +14,12 @@ import (
 // can be called from any non-final status, not just the next step in
 // sequence.
 type UpdateHangoutStatusUseCase struct {
-	hangouts domain.HangoutRepository
+	hangouts       domain.HangoutRepository
+	archiveCreator domain.ArchiveCreator
 }
 
-func NewUpdateHangoutStatusUseCase(hangouts domain.HangoutRepository) *UpdateHangoutStatusUseCase {
-	return &UpdateHangoutStatusUseCase{hangouts: hangouts}
+func NewUpdateHangoutStatusUseCase(hangouts domain.HangoutRepository, archiveCreator domain.ArchiveCreator) *UpdateHangoutStatusUseCase {
+	return &UpdateHangoutStatusUseCase{hangouts: hangouts, archiveCreator: archiveCreator}
 }
 
 type UpdateHangoutStatusInput struct {
@@ -56,6 +58,12 @@ func (uc *UpdateHangoutStatusUseCase) Execute(ctx context.Context, in UpdateHang
 
 	if err := uc.hangouts.Update(ctx, hangout); err != nil {
 		return nil, err
+	}
+
+	if in.NewStatus == domain.HangoutStatusCompleted {
+		if err := uc.archiveCreator.CreateArchive(ctx, in.HangoutID); err != nil {
+			log.Printf("hangout: failed to create archive for completed hangout %s: %v", in.HangoutID, err)
+		}
 	}
 
 	return hangout, nil

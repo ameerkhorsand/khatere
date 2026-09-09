@@ -8,26 +8,28 @@ import (
 // Config holds all settings the app reads from the environment.
 // Load this once in main.go. Do not call os.Getenv anywhere else.
 type Config struct {
-	DatabaseURL       string
-	JWTSecret         string
-	RedisAddr         string
-	MinIOEndpoint     string
-	MinIORootUser     string
-	MinIORootPassword string
-	Port              string
+	DatabaseURL        string
+	JWTSecret          string
+	RedisAddr          string
+	MinIOEndpoint      string
+	MinIORootUser      string
+	MinIORootPassword  string
+	ArchiveMediaBucket string
+	Port               string
 }
 
 // Load reads all config values from the environment.
 // It stops the program if a required value is missing.
 func Load() *Config {
 	return &Config{
-		DatabaseURL:       mustEnv("DATABASE_URL"),
-		JWTSecret:         mustEnv("JWT_SECRET"),
-		RedisAddr:         mustEnv("REDIS_ADDR"),
-		MinIOEndpoint:     mustEnv("MINIO_ENDPOINT"),
-		MinIORootUser:     mustEnv("MINIO_ROOT_USER"),
-		MinIORootPassword: mustEnv("MINIO_ROOT_PASSWORD"),
-		Port:              envOrDefault("PORT", "8080"),
+		DatabaseURL:        mustEnv("DATABASE_URL"),
+		JWTSecret:          mustEnv("JWT_SECRET"),
+		RedisAddr:          mustEnv("REDIS_ADDR"),
+		MinIOEndpoint:      mustEnv("MINIO_ENDPOINT"),
+		MinIORootUser:      mustEnv("MINIO_ROOT_USER"),
+		MinIORootPassword:  mustEnv("MINIO_ROOT_PASSWORD"),
+		ArchiveMediaBucket: envOrDefault("ARCHIVE_MEDIA_BUCKET", "archive-media"),
+		Port:               envOrDefault("PORT", "8080"),
 	}
 }
 

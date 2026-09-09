@@ -9,6 +9,7 @@ import (
 	rediscl "github.com/bLorax/khatere-backend/internal/platform/redis"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	miniogo "github.com/minio/minio-go/v7"
 )
 
 func main() {
@@ -43,6 +44,19 @@ func main() {
 
 	if err := miniocl.Ping(ctx, minioClient); err != nil {
 		log.Fatalf("minio ping failed: %v", err)
+	}
+
+	// Ensure the archive media bucket exists — MinIO does not create
+	// buckets on first PutObject the way S3 sometimes appears to.
+	exists, err := minioClient.BucketExists(ctx, cfg.ArchiveMediaBucket)
+	if err != nil {
+		log.Fatalf("failed to check archive media bucket: %v", err)
+	}
+	if !exists {
+		if err := minioClient.MakeBucket(ctx, cfg.ArchiveMediaBucket, miniogo.MakeBucketOptions{}); err != nil {
+			log.Fatalf("failed to create archive media bucket: %v", err)
+		}
+		log.Printf("created minio bucket: %s", cfg.ArchiveMediaBucket)
 	}
 
 	// --- Router ---

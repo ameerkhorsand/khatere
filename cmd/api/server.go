@@ -7,6 +7,14 @@ import (
 	"strings"
 	"time"
 
+	archivecreator "github.com/bLorax/khatere-backend/internal/hangout/adapters/archive"
+
+	archivegateway "github.com/bLorax/khatere-backend/internal/archive/adapters/hangout"
+	archiveHTTP "github.com/bLorax/khatere-backend/internal/archive/adapters/http"
+	archiveminio "github.com/bLorax/khatere-backend/internal/archive/adapters/minio"
+	archivePG "github.com/bLorax/khatere-backend/internal/archive/adapters/postgres"
+	archiveApp "github.com/bLorax/khatere-backend/internal/archive/application"
+
 	activityHTTP "github.com/bLorax/khatere-backend/internal/activity/adapters/http"
 	activityPG "github.com/bLorax/khatere-backend/internal/activity/adapters/postgres"
 	activityApp "github.com/bLorax/khatere-backend/internal/activity/application"
@@ -164,22 +172,37 @@ func newRouter(d deps) *gin.Engine {
 		rejectActivityUC,
 	)
 
-	// --- Hangout domain wiring ---
+	// --- Hangout domain wiring (repositories + infra only, for now) ---
 	hangoutStore := hangoutPG.NewStore(d.pool) // implements domain.Transactor
 	hangoutRepo := hangoutPG.NewHangoutRepository(d.pool)
 	participantRepo := hangoutPG.NewParticipantRepository(d.pool)
 	messageRepo := hangoutPG.NewMessageRepository(d.pool)
 	meetupPinRepo := hangoutPG.NewMeetupPinRepository(d.pool)
 	pinConfirmationRepo := hangoutPG.NewPinConfirmationRepository(d.pool)
-	hangoutNotifier := hangoutNotif.NewLogNotifier() // swap for a real adapter once notification infra exists
+	hangoutNotifier := hangoutNotif.NewLogNotifier()
 
+	// --- Archive domain wiring ---
+	archiveStore := archivePG.NewStore(d.pool) // implements domain.Transactor
+	archiveRepo := archivePG.NewArchiveRepository(d.pool)
+	archiveMediaRepo := archivePG.NewArchiveMediaRepository(d.pool)
+	deletionMarkRepo := archivePG.NewDeletionMarkRepository(d.pool)
+
+	archiveHangoutGateway := archivegateway.New(hangoutRepo, participantRepo, messageRepo)
+	archiveStorage := archiveminio.New(d.minioClient, d.cfg.ArchiveMediaBucket)
+	createArchiveUC := archiveApp.NewCreateArchiveUseCase(archiveRepo, archiveHangoutGateway)
+
+	// Mirror-image gateway: lets Hangout trigger archive creation on
+	// cancel/complete without importing the archive module directly.
+	hangoutArchiveCreator := archivecreator.New(createArchiveUC)
+
+	// --- Hangout domain wiring (use cases + handlers) ---
 	createHangoutUC := hangoutApp.NewCreateHangoutUseCase(hangoutRepo, participantRepo, hangoutStore)
 	getHangoutUC := hangoutApp.NewGetHangoutUseCase(hangoutRepo, participantRepo)
 	listHangoutsUC := hangoutApp.NewListHangoutsUseCase(hangoutRepo)
 	inviteParticipantsUC := hangoutApp.NewInviteParticipantsUseCase(hangoutRepo, participantRepo, hangoutNotifier)
 	respondToInviteUC := hangoutApp.NewRespondToInviteUseCase(participantRepo, hangoutNotifier)
-	cancelHangoutUC := hangoutApp.NewCancelHangoutUseCase(hangoutRepo, participantRepo, hangoutNotifier)
-	updateHangoutStatusUC := hangoutApp.NewUpdateHangoutStatusUseCase(hangoutRepo)
+	cancelHangoutUC := hangoutApp.NewCancelHangoutUseCase(hangoutRepo, participantRepo, hangoutNotifier, hangoutArchiveCreator)
+	updateHangoutStatusUC := hangoutApp.NewUpdateHangoutStatusUseCase(hangoutRepo, hangoutArchiveCreator)
 	sendMessageUC := hangoutApp.NewSendMessageUseCase(participantRepo, messageRepo)
 	listMessagesUC := hangoutApp.NewListMessagesUseCase(participantRepo, messageRepo)
 	proposeMeetupPinUC := hangoutApp.NewProposeMeetupPinUseCase(hangoutRepo, participantRepo, meetupPinRepo, pinConfirmationRepo, hangoutNotifier, hangoutStore)
@@ -187,18 +210,24 @@ func newRouter(d deps) *gin.Engine {
 	getMeetupPinUC := hangoutApp.NewGetMeetupPinUseCase(participantRepo, meetupPinRepo, pinConfirmationRepo)
 
 	hangoutHandlers := hangoutHTTP.NewHandlers(
-		createHangoutUC,
-		getHangoutUC,
-		listHangoutsUC,
-		inviteParticipantsUC,
-		respondToInviteUC,
-		cancelHangoutUC,
-		updateHangoutStatusUC,
-		sendMessageUC,
-		listMessagesUC,
-		proposeMeetupPinUC,
-		respondToMeetupPinUC,
-		getMeetupPinUC,
+		createHangoutUC, getHangoutUC, listHangoutsUC,
+		inviteParticipantsUC, respondToInviteUC, cancelHangoutUC,
+		updateHangoutStatusUC, sendMessageUC, listMessagesUC,
+		proposeMeetupPinUC, respondToMeetupPinUC, getMeetupPinUC,
+	)
+
+	// --- Archive domain wiring (remaining use cases + handlers) ---
+	listArchivesUC := archiveApp.NewListArchivesUseCase(archiveRepo, archiveHangoutGateway)
+	getArchiveUC := archiveApp.NewGetArchiveUseCase(archiveRepo, archiveMediaRepo, archiveHangoutGateway)
+	uploadMediaUC := archiveApp.NewUploadMediaUseCase(archiveRepo, archiveMediaRepo, archiveHangoutGateway, archiveStorage)
+	markArchiveDeletedUC := archiveApp.NewMarkArchiveDeletedUseCase(archiveRepo, archiveHangoutGateway, deletionMarkRepo)
+	purgeArchiveUC := archiveApp.NewCheckAndPurgeArchiveUseCase(archiveRepo, archiveMediaRepo, archiveHangoutGateway, deletionMarkRepo, archiveStorage)
+	deleteArchiveUC := archiveApp.NewDeleteArchiveUseCase(archiveStore, markArchiveDeletedUC, purgeArchiveUC)
+	listPendingPromptsUC := archiveApp.NewListPendingUploadPromptsUseCase(archiveHangoutGateway, archiveRepo)
+
+	archiveHandlers := archiveHTTP.NewHandlers(
+		listArchivesUC, getArchiveUC, uploadMediaUC,
+		deleteArchiveUC, listPendingPromptsUC,
 	)
 
 	// --- Router ---
@@ -276,6 +305,14 @@ func newRouter(d deps) *gin.Engine {
 	hangoutGroup := router.Group("/hangouts")
 	hangoutGroup.Use(authMW)
 	hangoutHandlers.RegisterRoutes(hangoutGroup)
+
+	archiveGroup := router.Group("/archives")
+	archiveGroup.Use(authMW)
+	archiveHandlers.RegisterRoutes(archiveGroup)
+
+	// Lives on the hangout group intentionally — see RegisterUploadPromptRoute's
+	// doc comment in internal/archive/adapters/http/handler.go.
+	archiveHandlers.RegisterUploadPromptRoute(hangoutGroup)
 
 	return router
 }

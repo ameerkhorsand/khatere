@@ -18,6 +18,7 @@
     --idle: #4a5064;
     --rail-a: #6c8cff;
     --rail-b: #b389f5;
+    --rail-c: #4fc9c0;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   }
@@ -135,6 +136,7 @@
   }
 
   section.batch.b1 { border-left-color: var(--rail-b); }
+  section.batch.b5 { border-left-color: var(--rail-c); }
 
   section.batch h2 {
     font-size: 15px;
@@ -451,6 +453,12 @@
     <div id="batch4Steps"></div>
   </section>
 
+  <section class="batch b5">
+    <h2>Batch 5 — Archive</h2>
+    <p class="sub">List and get archives from the now-cancelled Batch 3 hangout, upload media (photo/video validation), access control, personal delete, and the unanimous-purge flow.</p>
+    <div id="batch5Steps"></div>
+  </section>
+
   <footer class="note">
     Each run creates fresh test accounts using a timestamp, so it's safe to run this repeatedly without hitting duplicate email or handle conflicts. Click any step to see the exact request path and the raw response body. Click the ↦ button on a step to jump to its request in the right-hand panel.
   </footer>
@@ -485,6 +493,8 @@
     actUserPendingID2: null,  // B's activity — rejected partway through Batch 2
     actHostID: null,
     actModID: null,
+    archiveID: null,       // Batch 5 — the archive for Batch 3's now-cancelled hangout
+    archiveMediaID: null,  // Batch 5 — B's uploaded photo
   };
 
   let passed = 0, failed = 0;
@@ -516,6 +526,31 @@
         headers,
         body: body ? JSON.stringify(body) : undefined,
       });
+      text = await res.text();
+      try { json = text ? JSON.parse(text) : null; } catch (e) { /* not json */ }
+      return { status: res.status, body: json, raw: text };
+    } catch (e) {
+      return { status: 0, body: null, raw: String(e) };
+    }
+  }
+
+  async function callMultipart(method, path, token, fields, fileBlob, filename) {
+    const headers = {};
+    if (token) headers["Authorization"] = "Bearer " + token;
+
+    const form = new FormData();
+    form.append("file", fileBlob, filename);
+    Object.entries(fields).forEach(([k, v]) => {
+      if (v !== undefined && v !== null) form.append(k, String(v));
+    });
+
+    // Don't set Content-Type manually — the browser needs to add its
+    // own multipart boundary, which we can't reproduce by hand.
+    logRequest(currentStepMeta, method, path, headers, { multipart: true, filename, fields });
+
+    let res, text, json = null;
+    try {
+      res = await fetch(state.baseUrl + path, { method, headers, body: form });
       text = await res.text();
       try { json = text ? JSON.parse(text) : null; } catch (e) { /* not json */ }
       return { status: res.status, body: json, raw: text };
@@ -1439,6 +1474,162 @@
         return { pass: r.status === 409, raw: r };
       }
     },
+
+    // ---- Batch 5: Archive ----
+    // Reuses state.hgID — the hangout Batch 3 already cancelled. The
+    // Hangout -> Archive wiring means an archive for it should already
+    // exist by the time this batch runs.
+    {
+      id: "arc_list_a", batch: 5, title: "A lists their archives — includes the cancelled Batch 3 hangout",
+      method: "GET", path: "/archives",
+      run: async () => {
+        const r = await call("GET", "/archives", u("A").token, null);
+        if (r.status === 200 && Array.isArray(r.body)) {
+          const entry = r.body.find(a => a.HangoutID === state.hgID);
+          if (entry) state.archiveID = entry.ID || entry.id;
+        }
+        return { pass: r.status === 200 && !!state.archiveID, raw: r };
+      }
+    },
+    {
+      id: "arc_get_forbidden_outsider", batch: 5, title: "HOST (not a participant) cannot view the archive",
+      method: "GET", path: "/archives/:id",
+      run: async () => {
+        const r = await call("GET", "/archives/" + state.archiveID, u("HOST").token, null);
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+    {
+      id: "arc_get_detail", batch: 5, title: "A gets the archive — chat snapshot includes B's message",
+      method: "GET", path: "/archives/:id",
+      run: async () => {
+        const r = await call("GET", "/archives/" + state.archiveID, u("A").token, null);
+        const snapshot = r.body && r.body.Archive ? r.body.Archive.ChatSnapshot : "";
+        return { pass: r.status === 200 && snapshot.includes("see you there"), raw: r };
+      }
+    },
+    {
+      id: "arc_upload_forbidden_non_participant", batch: 5, title: "HOST cannot upload media to this archive",
+      method: "POST", path: "/archives/:id/media",
+      run: async () => {
+        const blob = new Blob(["fake-image-bytes"], { type: "image/jpeg" });
+        const r = await callMultipart("POST", "/archives/" + state.archiveID + "/media", u("HOST").token,
+          { media_type: "photo" }, blob, "test.jpg");
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+    {
+      id: "arc_upload_invalid_type", batch: 5, title: "Uploading an invalid media type is rejected",
+      method: "POST", path: "/archives/:id/media",
+      run: async () => {
+        const blob = new Blob(["fake-bytes"], { type: "application/octet-stream" });
+        const r = await callMultipart("POST", "/archives/" + state.archiveID + "/media", u("A").token,
+          { media_type: "confetti" }, blob, "test.bin");
+        return { pass: r.status === 400, raw: r };
+      }
+    },
+    {
+      id: "arc_upload_video_missing_duration", batch: 5, title: "A video upload without duration_seconds is rejected",
+      method: "POST", path: "/archives/:id/media",
+      run: async () => {
+        const blob = new Blob(["fake-video-bytes"], { type: "video/mp4" });
+        const r = await callMultipart("POST", "/archives/" + state.archiveID + "/media", u("A").token,
+          { media_type: "video" }, blob, "clip.mp4");
+        return { pass: r.status === 400, raw: r };
+      }
+    },
+    {
+      id: "arc_upload_video_too_long", batch: 5, title: "A video longer than 60 seconds is rejected",
+      method: "POST", path: "/archives/:id/media",
+      run: async () => {
+        const blob = new Blob(["fake-video-bytes"], { type: "video/mp4" });
+        const r = await callMultipart("POST", "/archives/" + state.archiveID + "/media", u("A").token,
+          { media_type: "video", duration_seconds: 90 }, blob, "clip.mp4");
+        return { pass: r.status === 400, raw: r };
+      }
+    },
+    {
+      id: "arc_upload_photo_b", batch: 5, title: "B (a participant) uploads a photo",
+      method: "POST", path: "/archives/:id/media",
+      run: async () => {
+        const blob = new Blob(["fake-image-bytes"], { type: "image/jpeg" });
+        const r = await callMultipart("POST", "/archives/" + state.archiveID + "/media", u("B").token,
+          { media_type: "photo" }, blob, "photo.jpg");
+        if (r.status === 201 && r.body) state.archiveMediaID = r.body.ID || r.body.id;
+        return { pass: r.status === 201, raw: r };
+      }
+    },
+    {
+      id: "arc_get_detail_has_media", batch: 5, title: "Archive detail now lists B's uploaded photo",
+      method: "GET", path: "/archives/:id",
+      run: async () => {
+        const r = await call("GET", "/archives/" + state.archiveID, u("A").token, null);
+        const media = r.body ? r.body.Media : null;
+        return { pass: r.status === 200 && Array.isArray(media) && media.length === 1, raw: r };
+      }
+    },
+    {
+      id: "arc_pending_prompts_a", batch: 5, title: "A's pending upload-prompt list (200 either way — Batch 3's hangout has no scheduled_end_at, so an empty list here is expected, not a failure)",
+      method: "GET", path: "/hangouts/pending-upload-prompt",
+      run: async () => {
+        const r = await call("GET", "/hangouts/pending-upload-prompt", u("A").token, null);
+        return { pass: r.status === 200 && Array.isArray(r.body), raw: r };
+      }
+    },
+    {
+      id: "arc_delete_a_first", batch: 5, title: "A marks the archive for personal deletion — not unanimous yet",
+      method: "POST", path: "/archives/:id/delete",
+      run: async () => {
+        const r = await call("POST", "/archives/" + state.archiveID + "/delete", u("A").token, null);
+        return { pass: r.status === 200 && r.body && r.body.purged === false, raw: r };
+      }
+    },
+    {
+      id: "arc_delete_a_again_conflict", batch: 5, title: "A marking it again is rejected — already marked",
+      method: "POST", path: "/archives/:id/delete",
+      run: async () => {
+        const r = await call("POST", "/archives/" + state.archiveID + "/delete", u("A").token, null);
+        return { pass: r.status === 409, raw: r };
+      }
+    },
+    {
+      id: "arc_delete_b_triggers_purge", batch: 5, title: "B marks it too — every participant has now asked, archive is purged",
+      method: "POST", path: "/archives/:id/delete",
+      run: async () => {
+        const r = await call("POST", "/archives/" + state.archiveID + "/delete", u("B").token, null);
+        return { pass: r.status === 200 && r.body && r.body.purged === true, raw: r };
+      }
+    },
+    {
+      id: "arc_get_after_purge", batch: 5, title: "After purge — status is purged, chat snapshot is cleared, media list is empty",
+      method: "GET", path: "/archives/:id",
+      run: async () => {
+        const r = await call("GET", "/archives/" + state.archiveID, u("A").token, null);
+        const ok = r.status === 200 && r.body && r.body.Archive &&
+          r.body.Archive.Status === "purged" &&
+          r.body.Archive.ChatSnapshot === "" &&
+          Array.isArray(r.body.Media) && r.body.Media.length === 0;
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "arc_upload_after_purge_conflict", batch: 5, title: "Uploading to a purged archive is rejected",
+      method: "POST", path: "/archives/:id/media",
+      run: async () => {
+        const blob = new Blob(["fake-image-bytes"], { type: "image/jpeg" });
+        const r = await callMultipart("POST", "/archives/" + state.archiveID + "/media", u("A").token,
+          { media_type: "photo" }, blob, "toolate.jpg");
+        return { pass: r.status === 409, raw: r };
+      }
+    },
+    {
+      id: "arc_get_missing_404", batch: 5, title: "Getting a non-existent archive returns 404",
+      method: "GET", path: "/archives/:id",
+      run: async () => {
+        const r = await call("GET", "/archives/00000000-0000-0000-0000-000000000000", u("A").token, null);
+        return { pass: r.status === 404, raw: r };
+      }
+    },
   ];
 
   // ---------- rendering ----------
@@ -1449,11 +1640,13 @@
     const b2 = document.getElementById("batch2Steps");
     const b3 = document.getElementById("batch3Steps");
     const b4 = document.getElementById("batch4Steps");
+    const b5 = document.getElementById("batch5Steps");
     b0.innerHTML = "";
     b1.innerHTML = "";
     b2.innerHTML = "";
     b3.innerHTML = "";
     b4.innerHTML = "";
+    b5.innerHTML = "";
 
     allSteps.forEach((step, idx) => {
       const row = el(`
@@ -1472,7 +1665,7 @@
         </div>
       `);
       row.querySelector('[data-role="jump"]').addEventListener("click", () => jumpToRequest(step.id));
-      const container = step.batch === 0 ? b0 : step.batch === 1 ? b1 : step.batch === 2 ? b2 : step.batch === 3 ? b3 : b4;
+      const container = step.batch === 0 ? b0 : step.batch === 1 ? b1 : step.batch === 2 ? b2 : step.batch === 3 ? b3 : step.batch === 4 ? b4 : b5;
       container.appendChild(row);
     });
   }
@@ -1521,6 +1714,8 @@
     state.actUserPendingID2 = null;
     state.actHostID = null;
     state.actModID = null;
+    state.archiveID = null;
+    state.archiveMediaID = null;
     passed = 0; failed = 0;
     currentStepMeta = null;
     clearRequestsPanel();

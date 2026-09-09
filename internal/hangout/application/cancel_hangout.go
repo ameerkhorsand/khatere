@@ -9,13 +9,14 @@ import (
 )
 
 type CancelHangoutUseCase struct {
-	hangouts     domain.HangoutRepository
-	participants domain.ParticipantRepository
-	notifier     domain.Notifier
+	hangouts       domain.HangoutRepository
+	participants   domain.ParticipantRepository
+	notifier       domain.Notifier
+	archiveCreator domain.ArchiveCreator
 }
 
-func NewCancelHangoutUseCase(hangouts domain.HangoutRepository, participants domain.ParticipantRepository, notifier domain.Notifier) *CancelHangoutUseCase {
-	return &CancelHangoutUseCase{hangouts: hangouts, participants: participants, notifier: notifier}
+func NewCancelHangoutUseCase(hangouts domain.HangoutRepository, participants domain.ParticipantRepository, notifier domain.Notifier, archiveCreator domain.ArchiveCreator) *CancelHangoutUseCase {
+	return &CancelHangoutUseCase{hangouts: hangouts, participants: participants, notifier: notifier, archiveCreator: archiveCreator}
 }
 
 type CancelHangoutInput struct {
@@ -40,6 +41,14 @@ func (uc *CancelHangoutUseCase) Execute(ctx context.Context, in CancelHangoutInp
 	if err := uc.hangouts.Update(ctx, hangout); err != nil {
 		return nil, err
 	}
+
+	// >>> NEW — add this block here <
+	// Best-effort, same as the notifications below: the cancellation
+	// is already recorded, so a failure here is logged, not returned.
+	if err := uc.archiveCreator.CreateArchive(ctx, in.HangoutID); err != nil {
+		log.Printf("hangout: failed to create archive for cancelled hangout %s: %v", in.HangoutID, err)
+	}
+	// >>> end new block <
 
 	// Best-effort: the cancellation is already recorded, so a
 	// notification failure here is logged, not returned.
