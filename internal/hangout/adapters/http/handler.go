@@ -151,6 +151,7 @@ func (h *Handlers) CreateHangout(c *gin.Context) {
 
 	hangout, err := h.createHangout.Execute(c.Request.Context(), application.CreateHangoutInput{
 		OrganizerID: organizerID,
+		ActivityID:  req.ActivityID,
 		Title:       req.Title,
 		Description: req.Description,
 		ScheduledAt: req.ScheduledAt,

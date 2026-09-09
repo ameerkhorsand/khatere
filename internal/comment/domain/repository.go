@@ -49,3 +49,19 @@ type CommentVoteRepository interface {
 	// treat a missing key as VoteTally{0, 0}.
 	TallyForComments(ctx context.Context, commentIDs []uuid.UUID) (map[uuid.UUID]VoteTally, error)
 }
+
+// -----------------------------------------------------------------
+// CommentSummarizer
+//
+// Port over the AI summary provider (DeepSeek). Kept out of the
+// application layer so the use case depends on this one method, not
+// on any particular vendor's SDK or HTTP shape — same pattern as
+// domain.MediaStorage in the archive module. The adapter lives at
+// internal/comment/adapters/deepseek.
+// -----------------------------------------------------------------
+
+type CommentSummarizer interface {
+	// Summarize takes the approved comment bodies for one activity,
+	// oldest first, and returns a short natural-language summary.
+	Summarize(ctx context.Context, commentBodies []string) (string, error)
+}

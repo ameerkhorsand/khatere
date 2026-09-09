@@ -15,6 +15,9 @@ type Config struct {
 	MinIORootUser      string
 	MinIORootPassword  string
 	ArchiveMediaBucket string
+	DeepSeekAPIKey     string
+	DeepSeekBaseURL    string
+	DeepSeekModel      string
 	Port               string
 }
 
@@ -29,7 +32,15 @@ func Load() *Config {
 		MinIORootUser:      mustEnv("MINIO_ROOT_USER"),
 		MinIORootPassword:  mustEnv("MINIO_ROOT_PASSWORD"),
 		ArchiveMediaBucket: envOrDefault("ARCHIVE_MEDIA_BUCKET", "archive-media"),
-		Port:               envOrDefault("PORT", "8080"),
+		// DeepSeekAPIKey is intentionally optional (envOrDefault, not
+		// mustEnv): the AI comment summary is one feature among many,
+		// and a missing key should disable it, not stop the whole API
+		// from starting. See internal/comment/adapters/deepseek for
+		// how an empty key is handled.
+		DeepSeekAPIKey:  envOrDefault("DEEPSEEK_API_KEY", ""),
+		DeepSeekBaseURL: envOrDefault("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+		DeepSeekModel:   envOrDefault("DEEPSEEK_MODEL", "deepseek-chat"),
+		Port:            envOrDefault("PORT", "8080"),
 	}
 }
 

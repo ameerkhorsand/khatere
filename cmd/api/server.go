@@ -106,6 +106,7 @@ func newRouter(d deps) *gin.Engine {
 	listCatalogUC := userApp.NewListInterestCatalogUseCase(interestRepo)
 
 	userHandlers := userHTTP.NewHandlers(createProfileUC, updateProfileUC, setInterestsUC, listInterestsUC, listCatalogUC)
+	userPublicHandlers := userHTTP.NewPublicHandlers(userRepo)
 
 	// --- Circle domain wiring ---
 	connectionRepo := circlePG.NewConnectionRepository(d.pool)
@@ -317,6 +318,13 @@ func newRouter(d deps) *gin.Engine {
 	userGroup := router.Group("/user")
 	userGroup.Use(authMW)
 	userHandlers.RegisterRoutes(userGroup)
+
+	// Public, read-only lookups (e.g. resolving a UUID to a name for
+	// Circle/Hangout screens). Separate from /user on purpose — this
+	// group returns other people's data, not the caller's own.
+	usersGroup := router.Group("/users")
+	usersGroup.Use(authMW)
+	userPublicHandlers.RegisterRoutes(usersGroup)
 
 	hostGroup := router.Group("/host")
 	hostGroup.Use(authMW)
