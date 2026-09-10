@@ -11,12 +11,14 @@ import (
 )
 
 type Handlers struct {
-	createActivity      *application.CreateActivityUseCase
-	getActivity         *application.GetActivityUseCase
-	listActivities      *application.ListActivitiesUseCase
-	listModerationQueue *application.ListModerationQueueUseCase
-	approveActivity     *application.ApproveActivityUseCase
-	rejectActivity      *application.RejectActivityUseCase
+	createActivity        *application.CreateActivityUseCase
+	getActivity           *application.GetActivityUseCase
+	listActivities        *application.ListActivitiesUseCase
+	listModerationQueue   *application.ListModerationQueueUseCase
+	approveActivity       *application.ApproveActivityUseCase
+	rejectActivity        *application.RejectActivityUseCase
+	setActivityInterests  *application.SetActivityInterestsUseCase
+	listActivityInterests *application.ListActivityInterestsUseCase
 }
 
 func NewHandlers(
@@ -26,10 +28,13 @@ func NewHandlers(
 	listModerationQueue *application.ListModerationQueueUseCase,
 	approveActivity *application.ApproveActivityUseCase,
 	rejectActivity *application.RejectActivityUseCase,
+	setActivityInterests *application.SetActivityInterestsUseCase,
+	listActivityInterests *application.ListActivityInterestsUseCase,
 ) *Handlers {
 	return &Handlers{
 		createActivity, getActivity, listActivities,
 		listModerationQueue, approveActivity, rejectActivity,
+		setActivityInterests, listActivityInterests,
 	}
 }
 
@@ -41,6 +46,9 @@ func (h *Handlers) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/moderation/queue", h.ListModerationQueue)
 	r.POST("/:id/approve", h.ApproveActivity)
 	r.POST("/:id/reject", h.RejectActivity)
+
+	r.PUT("/:id/interests", h.SetActivityInterests)
+	r.GET("/:id/interests", h.ListActivityInterests)
 }
 
 func accountIDFromContext(c *gin.Context) (uuid.UUID, error) {
@@ -191,6 +199,81 @@ func (h *Handlers) ApproveActivity(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, activity)
+}
+
+type setActivityInterestsRequest struct {
+	InterestIDs []string `json:"interest_ids" binding:"required"`
+}
+
+func (h *Handlers) SetActivityInterests(c *gin.Context) {
+	callerID, err := accountIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	accountType, err := accountTypeFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	activityID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid activity id"})
+		return
+	}
+
+	var req setActivityInterestsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	interestIDs := make([]uuid.UUID, 0, len(req.InterestIDs))
+	for _, raw := range req.InterestIDs {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid interest id: " + raw})
+			return
+		}
+		interestIDs = append(interestIDs, id)
+	}
+
+	err = h.setActivityInterests.Execute(c.Request.Context(), application.SetActivityInterestsInput{
+		ActivityID:        activityID,
+		InterestIDs:       interestIDs,
+		CallerID:          callerID,
+		CallerIsModerator: accountType == "moderator",
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrActivityNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "activity not found"})
+		case errors.Is(err, domain.ErrNotAuthorizedToTag):
+			c.JSON(http.StatusForbidden, gin.H{"error": "only the activity's creator or a moderator can tag its interests"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		}
+		return
+	}
+
+	c.Status(http.StatusOK)
+}
+
+func (h *Handlers) ListActivityInterests(c *gin.Context) {
+	activityID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid activity id"})
+		return
+	}
+
+	interests, err := h.listActivityInterests.Execute(c.Request.Context(), activityID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, interests)
 }
 
 type rejectActivityRequest struct {

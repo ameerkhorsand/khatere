@@ -63,4 +63,5 @@ var (
 	ErrActivityNotPending    = errors.New("activity is not pending review")
 	ErrVersionConflict       = errors.New("activity was modified by another request")
 	ErrNotAuthorizedToReview = errors.New("only moderators can review activities")
+	ErrNotAuthorizedToTag    = errors.New("only the activity's creator or a moderator can tag its interests")
 )

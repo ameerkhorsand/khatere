@@ -140,6 +140,8 @@
   section.batch.b5 { border-left-color: var(--rail-c); }
   section.batch.b7 { border-left-color: var(--rail-d); }
   section.batch.b8 { border-left-color: var(--rail-a); }
+  section.batch.b9 { border-left-color: var(--rail-b); }
+  section.batch.b10 { border-left-color: var(--rail-c); }
 
   section.batch h2 {
     font-size: 15px;
@@ -409,7 +411,7 @@
 
   <header class="page">
     <h1>Khatere API console</h1>
-    <p>Runs every endpoint built so far — auth, user profiles, interests, host, moderator, circle, activity catalog + moderation, hangout planning, meetup pin, comments + voting, AI comment summaries, and attendance + badges — against a live API and shows the real request path and response for each step. The panel on the right always shows the exact JSON request each test sends, in run order, so you can scroll back and compare any two tests.</p>
+    <p>Runs every endpoint built so far — auth, user profiles, interests, host, moderator, circle, activity catalog + moderation, hangout planning, meetup pin, comments + voting, AI comment summaries, attendance + badges, and personalized recommendations — against a live API and shows the real request path and response for each step. The panel on the right always shows the exact JSON request each test sends, in run order, so you can scroll back and compare any two tests.</p>
   </header>
 
   <div class="controls">
@@ -480,8 +482,20 @@
     <div id="batch8Steps"></div>
   </section>
 
+  <section class="batch b9">
+    <h2>Batch 9 — Recommendations</h2>
+    <p class="sub">Reads A's ranked suggestion feed. Checks the auth guard, the shape of each score (Total plus all four signals in [0,1]), that the approved host activity from Batch 2 shows up, that the limit param is honored, and that a second call reads the cache instead of recomputing. InterestMatch is expected to be the neutral 0.5 fallback throughout — there's no endpoint yet to tag an activity with an interest.</p>
+    <div id="batch9Steps"></div>
+  </section>
+
+  <section class="batch b10">
+    <h2>Batch 10 — Activity Interests</h2>
+    <p class="sub">Tags the approved host activity from Batch 2 with interests, confirms only the creator or a moderator can do that, confirms re-tagging fully replaces the old set, and closes the loop from Batch 9 by showing InterestMatch stop being the neutral 0.5 fallback once a user's own interests overlap with the tags. B's own interests are set here for the first time, purely so B's first-ever /recommendations call (necessarily a cache miss) reflects the tag right away.</p>
+    <div id="batch10Steps"></div>
+  </section>
+
   <footer class="note">
-    Each run creates fresh test accounts using a timestamp, so it's safe to run this repeatedly without hitting duplicate email or handle conflicts. Batch 8 uses the approved host activity from Batch 2 and fresh user A, so the QR, badge, attendance verification, and earned-badge assertions are isolated per run. Click any step to see the exact request path and the raw response body. Click the ↦ button on a step to jump to its request in the right-hand panel.
+    Each run creates fresh test accounts using a timestamp, so it's safe to run this repeatedly without hitting duplicate email or handle conflicts. Batch 8 uses the approved host activity from Batch 2 and fresh user A, so the QR, badge, attendance verification, and earned-badge assertions are isolated per run. Batch 9 reuses A's interests from Batch 0 and the approved host activity from Batch 2, and its candidate pool grows across every run ever made against this database, since nothing here deletes old activities. Batch 10 reuses the same host activity and catalog, and gives B a first-ever recommendations call so its cache-miss reflects Batch 10's tagging. Click any step to see the exact request path and the raw response body. Click the ↦ button on a step to jump to its request in the right-hand panel.
   </footer>
 
 </div>
@@ -519,6 +533,8 @@
     rtHgID: null,          // Batch 6 — hangout linked to actHostID, driven to completed
     rtCommentC: null,      // Batch 6 — C's comment, gets approved and voted on
     rtCommentB: null,      // Batch 6 — B's comment, gets rejected
+    recoSuggestions: null, // Batch 9 — A's suggestion list from the first (cache-miss) call
+    recoSuggestionsB: null, // Batch 10 — B's suggestion list from B's first-ever (cache-miss) call
   };
 
   let passed = 0, failed = 0;
@@ -2345,6 +2361,187 @@
         return { pass: r.status === 401, raw: r };
       }
     },
+
+    // ---- Batch 9: Recommendations ----
+    // Reads A's ranked suggestion feed. There's no endpoint yet to
+    // tag an activity with an interest (activity_interests has no
+    // writer), so InterestMatch is the neutral 0.5 fallback for
+    // every suggestion in this batch — that's expected, not a bug,
+    // until Phase 8's activity-tagging UI exists.
+
+    {
+      id: "reco_unauthorized", batch: 9, title: "Recommendations require a valid auth token",
+      method: "GET", path: "/recommendations",
+      run: async () => {
+        const r = await call("GET", "/recommendations", null, null);
+        return { pass: r.status === 401, raw: r };
+      }
+    },
+    {
+      id: "reco_get_default", batch: 9, title: "A gets a ranked suggestion list (cache miss — computed live)",
+      method: "GET", path: "/recommendations",
+      run: async () => {
+        const r = await call("GET", "/recommendations", u("A").token, null);
+        const suggestions = r.body ? r.body.suggestions : null;
+        if (Array.isArray(suggestions)) state.recoSuggestions = suggestions;
+        const ok = r.status === 200 && Array.isArray(suggestions) && suggestions.length > 0 && suggestions.length <= 20;
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "reco_contains_host_activity", batch: 9, title: "The approved host activity from Batch 2 appears in A's suggestions",
+      method: "GET", path: "/recommendations",
+      run: async () => {
+        const found = (state.recoSuggestions || []).some(s => {
+          const activityID = s.ActivityID !== undefined ? s.ActivityID : s.activity_id;
+          return activityID === state.actHostID;
+        });
+        return { pass: found, raw: { status: 200, body: state.recoSuggestions } };
+      }
+    },
+    {
+      id: "reco_score_shape", batch: 9, title: "Each suggestion has a Total in [0,1] and all four signals in [0,1]",
+      method: "GET", path: "/recommendations",
+      run: async () => {
+        const list = state.recoSuggestions || [];
+        const inRange = (v) => typeof v === "number" && v >= 0 && v <= 1;
+        const ok = list.length > 0 && list.every(s => {
+          const total = s.Total !== undefined ? s.Total : s.total;
+          const signals = s.Signals !== undefined ? s.Signals : s.signals;
+          if (!signals) return false;
+          const interest = signals.InterestMatch !== undefined ? signals.InterestMatch : signals.interest_match;
+          const history = signals.HistoryAffinity !== undefined ? signals.HistoryAffinity : signals.history_affinity;
+          const engagement = signals.Engagement !== undefined ? signals.Engagement : signals.engagement;
+          const quality = signals.Quality !== undefined ? signals.Quality : signals.quality;
+          return inRange(total) && inRange(interest) && inRange(history) && inRange(engagement) && inRange(quality);
+        });
+        return { pass: ok, raw: { status: 200, body: state.recoSuggestions } };
+      }
+    },
+    {
+      id: "reco_untagged_neutral_interest", batch: 9, title: "InterestMatch is the neutral 0.5 fallback for every suggestion — no tagging endpoint exists yet",
+      method: "GET", path: "/recommendations",
+      run: async () => {
+        const list = state.recoSuggestions || [];
+        const ok = list.length > 0 && list.every(s => {
+          const signals = s.Signals !== undefined ? s.Signals : s.signals;
+          const interest = signals.InterestMatch !== undefined ? signals.InterestMatch : signals.interest_match;
+          return interest === 0.5;
+        });
+        return { pass: ok, raw: { status: 200, body: state.recoSuggestions } };
+      }
+    },
+    {
+      id: "reco_limit_param", batch: 9, title: "limit=1 returns exactly one suggestion",
+      method: "GET", path: "/recommendations?limit=1",
+      run: async () => {
+        const r = await call("GET", "/recommendations?limit=1", u("A").token, null);
+        const suggestions = r.body ? r.body.suggestions : null;
+        return { pass: r.status === 200 && Array.isArray(suggestions) && suggestions.length === 1, raw: r };
+      }
+    },
+    {
+      id: "reco_cache_hit_repeat", batch: 9, title: "A second call reads the cache — same top suggestion as the first call",
+      method: "GET", path: "/recommendations",
+      run: async () => {
+        const r = await call("GET", "/recommendations", u("A").token, null);
+        const suggestions = r.body ? r.body.suggestions : null;
+        const firstOfSecond = Array.isArray(suggestions) && suggestions[0]
+          ? (suggestions[0].ActivityID !== undefined ? suggestions[0].ActivityID : suggestions[0].activity_id)
+          : null;
+        const firstOfFirst = (state.recoSuggestions || [])[0];
+        const firstOfFirstID = firstOfFirst
+          ? (firstOfFirst.ActivityID !== undefined ? firstOfFirst.ActivityID : firstOfFirst.activity_id)
+          : null;
+        const ok = r.status === 200 && !!firstOfSecond && firstOfSecond === firstOfFirstID;
+        return { pass: ok, raw: r };
+      }
+    },
+
+    // ---- Batch 10: Activity Interests ----
+    // Tags the Batch 2 host activity with interests, then closes the
+    // loop Batch 9 left open: with the tag in place and B's own
+    // interests set to match, B's first-ever /recommendations call
+    // (a guaranteed cache miss, since B's account is fresh this run)
+    // should show a non-neutral InterestMatch for that activity.
+
+    {
+      id: "interests_forbidden_non_creator", batch: 10, title: "C (neither creator nor moderator) cannot tag the host activity",
+      method: "PUT", path: "/activities/{id}/interests",
+      run: async () => {
+        const ids = state.catalog.slice(0, 2).map(i => i.ID || i.id);
+        const r = await call("PUT", "/activities/" + state.actHostID + "/interests", u("C").token, { interest_ids: ids });
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+    {
+      id: "interests_tag_host_activity", batch: 10, title: "Host tags its own activity with 2 interests from the catalog",
+      method: "PUT", path: "/activities/{id}/interests",
+      run: async () => {
+        const ids = state.catalog.slice(0, 2).map(i => i.ID || i.id);
+        const r = await call("PUT", "/activities/" + state.actHostID + "/interests", u("HOST").token, { interest_ids: ids });
+        return { pass: r.status === 200, raw: r };
+      }
+    },
+    {
+      id: "interests_list_after_tag", batch: 10, title: "GET the activity's interests — returns the same 2 tags",
+      method: "GET", path: "/activities/{id}/interests",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.actHostID + "/interests", u("A").token, null);
+        const expected = state.catalog.slice(0, 2).map(i => i.ID || i.id).sort();
+        const got = Array.isArray(r.body) ? r.body.map(i => i.ID || i.id).sort() : [];
+        const ok = r.status === 200 && got.length === 2 && JSON.stringify(got) === JSON.stringify(expected);
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "interests_retag_replaces", batch: 10, title: "Re-tagging with a different set fully replaces the old one",
+      method: "PUT", path: "/activities/{id}/interests",
+      run: async () => {
+        const soloId = (state.catalog[2] || {});
+        const ids = [soloId.ID || soloId.id];
+        const putR = await call("PUT", "/activities/" + state.actHostID + "/interests", u("HOST").token, { interest_ids: ids });
+        const getR = await call("GET", "/activities/" + state.actHostID + "/interests", u("A").token, null);
+        const got = Array.isArray(getR.body) ? getR.body.map(i => i.ID || i.id) : [];
+        const ok = putR.status === 200 && getR.status === 200 && got.length === 1 && got[0] === ids[0];
+        return { pass: ok, raw: { status: getR.status, body: getR.body } };
+      }
+    },
+    {
+      id: "interests_restore_ab_match", batch: 10, title: "Re-tag back to the 2 catalog interests A and B share",
+      method: "PUT", path: "/activities/{id}/interests",
+      run: async () => {
+        const ids = state.catalog.slice(0, 2).map(i => i.ID || i.id);
+        const r = await call("PUT", "/activities/" + state.actHostID + "/interests", u("HOST").token, { interest_ids: ids });
+        return { pass: r.status === 200, raw: r };
+      }
+    },
+    {
+      id: "interests_set_b_matching", batch: 10, title: "Set B's own interests to the same 2 catalog entries",
+      method: "PUT", path: "/user/interests",
+      run: async () => {
+        const ids = state.catalog.slice(0, 2).map(i => i.ID || i.id);
+        const r = await call("PUT", "/user/interests", u("B").token, { interest_ids: ids });
+        return { pass: r.status === 200, raw: r };
+      }
+    },
+    {
+      id: "reco_interest_nonneutral", batch: 10, title: "B's first-ever suggestions show a non-neutral (full-match) InterestMatch for the host activity",
+      method: "GET", path: "/recommendations",
+      run: async () => {
+        const r = await call("GET", "/recommendations", u("B").token, null);
+        const suggestions = r.body ? r.body.suggestions : null;
+        if (Array.isArray(suggestions)) state.recoSuggestionsB = suggestions;
+        const match = (suggestions || []).find(s => {
+          const activityID = s.ActivityID !== undefined ? s.ActivityID : s.activity_id;
+          return activityID === state.actHostID;
+        });
+        const signals = match ? (match.Signals !== undefined ? match.Signals : match.signals) : null;
+        const interest = signals ? (signals.InterestMatch !== undefined ? signals.InterestMatch : signals.interest_match) : null;
+        const ok = r.status === 200 && !!match && interest === 1;
+        return { pass: ok, raw: r };
+      }
+    },
   ];
 
   // ---------- rendering ----------
@@ -2359,6 +2556,8 @@
     const b6 = document.getElementById("batch6Steps");
     const b7 = document.getElementById("batch7Steps");
     const b8 = document.getElementById("batch8Steps");
+    const b9 = document.getElementById("batch9Steps");
+    const b10 = document.getElementById("batch10Steps");
     b0.innerHTML = "";
     b1.innerHTML = "";
     b2.innerHTML = "";
@@ -2368,6 +2567,8 @@
     b6.innerHTML = "";
     b7.innerHTML = "";
     b8.innerHTML = "";
+    b9.innerHTML = "";
+    b10.innerHTML = "";
 
     allSteps.forEach((step, idx) => {
       const row = el(`
@@ -2386,7 +2587,7 @@
         </div>
       `);
       row.querySelector('[data-role="jump"]').addEventListener("click", () => jumpToRequest(step.id));
-      const container = step.batch === 0 ? b0 : step.batch === 1 ? b1 : step.batch === 2 ? b2 : step.batch === 3 ? b3 : step.batch === 4 ? b4 : step.batch === 5 ? b5 : step.batch === 6 ? b6 : step.batch === 7 ? b7 : b8;
+      const container = step.batch === 0 ? b0 : step.batch === 1 ? b1 : step.batch === 2 ? b2 : step.batch === 3 ? b3 : step.batch === 4 ? b4 : step.batch === 5 ? b5 : step.batch === 6 ? b6 : step.batch === 7 ? b7 : step.batch === 8 ? b8 : step.batch === 9 ? b9 : b10;
       container.appendChild(row);
     });
   }
@@ -2449,6 +2650,8 @@
     state.badgeName = null;
     state.badgeIconKey = null;
     state.attendanceVerificationID = null;
+    state.recoSuggestions = null;
+    state.recoSuggestionsB = null;
     passed = 0; failed = 0;
     currentStepMeta = null;
     clearRequestsPanel();

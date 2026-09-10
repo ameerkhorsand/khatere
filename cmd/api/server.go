@@ -8,6 +8,11 @@ import (
 	"strings"
 	"time"
 
+	recommendationHTTP "github.com/bLorax/khatere-backend/internal/recommendation/adapters/http"
+	recommendationPG "github.com/bLorax/khatere-backend/internal/recommendation/adapters/postgres"
+	worker "github.com/bLorax/khatere-backend/internal/recommendation/adapters/worker"
+	recommendationApp "github.com/bLorax/khatere-backend/internal/recommendation/application"
+
 	badgeHTTP "github.com/bLorax/khatere-backend/internal/badge/adapters/http"
 	badgePG "github.com/bLorax/khatere-backend/internal/badge/adapters/postgres"
 	badgeApp "github.com/bLorax/khatere-backend/internal/badge/application"
@@ -27,13 +32,13 @@ import (
 	commentApp "github.com/bLorax/khatere-backend/internal/comment/application"
 	commentDomain "github.com/bLorax/khatere-backend/internal/comment/domain"
 
-	archivecreator "github.com/bLorax/khatere-backend/internal/hangout/adapters/archive"
-
 	archivegateway "github.com/bLorax/khatere-backend/internal/archive/adapters/hangout"
 	archiveHTTP "github.com/bLorax/khatere-backend/internal/archive/adapters/http"
 	archiveminio "github.com/bLorax/khatere-backend/internal/archive/adapters/minio"
 	archivePG "github.com/bLorax/khatere-backend/internal/archive/adapters/postgres"
 	archiveApp "github.com/bLorax/khatere-backend/internal/archive/application"
+	archivecreator "github.com/bLorax/khatere-backend/internal/hangout/adapters/archive"
+	suggestionacceptance "github.com/bLorax/khatere-backend/internal/hangout/adapters/recommendation"
 
 	activityHTTP "github.com/bLorax/khatere-backend/internal/activity/adapters/http"
 	activityPG "github.com/bLorax/khatere-backend/internal/activity/adapters/postgres"
@@ -98,8 +103,10 @@ type deps struct {
 }
 
 // newRouter wires every bounded context's repositories, use cases, and
-// HTTP handlers, then returns a ready-to-run gin.Engine.
-func newRouter(d deps) *gin.Engine {
+// HTTP handlers, then returns a ready-to-run gin.Engine, plus the
+// recommendation cache-refresh worker (Step 5) so main.go can start
+// and stop it alongside the server.
+func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
 	// --- Security ---
 	hasher := security.NewBcryptHasher(0)
 	tokens := security.NewJWTTokenService([]byte(d.cfg.JWTSecret), 15*time.Minute)
@@ -184,6 +191,7 @@ func newRouter(d deps) *gin.Engine {
 
 	// --- Activity domain wiring ---
 	activityRepo := activityPG.NewActivityRepository(d.pool)
+	activityInterestRepo := activityPG.NewActivityInterestRepository(d.pool)
 
 	createActivityUC := activityApp.NewCreateActivityUseCase(activityRepo)
 	getActivityUC := activityApp.NewGetActivityUseCase(activityRepo)
@@ -191,6 +199,8 @@ func newRouter(d deps) *gin.Engine {
 	listModerationQueueUC := activityApp.NewListModerationQueueUseCase(activityRepo)
 	approveActivityUC := activityApp.NewApproveActivityUseCase(activityRepo)
 	rejectActivityUC := activityApp.NewRejectActivityUseCase(activityRepo)
+	setActivityInterestsUC := activityApp.NewSetActivityInterestsUseCase(activityRepo, activityInterestRepo)
+	listActivityInterestsUC := activityApp.NewListActivityInterestsUseCase(activityInterestRepo)
 
 	activityHandlers := activityHTTP.NewHandlers(
 		createActivityUC,
@@ -199,6 +209,8 @@ func newRouter(d deps) *gin.Engine {
 		listModerationQueueUC,
 		approveActivityUC,
 		rejectActivityUC,
+		setActivityInterestsUC,
+		listActivityInterestsUC,
 	)
 
 	// --- Hangout domain wiring (repositories + infra only, for now) ---
@@ -296,6 +308,31 @@ func newRouter(d deps) *gin.Engine {
 		getSummaryUC,
 	)
 
+	// --- Recommendation domain wiring ---
+	recommendationCache := recommendationPG.NewRecommendationRepository(d.pool)
+	candidateSource := recommendationPG.NewActivityCandidateSource(d.pool)
+	interestSource := recommendationPG.NewInterestSource(d.pool)
+	historySource := recommendationPG.NewHistorySource(d.pool)
+	engagementSource := recommendationPG.NewEngagementSource(d.pool)
+	qualitySource := recommendationPG.NewQualitySource(d.pool)
+	suggestionStatsRepo := recommendationPG.NewSuggestionStatsRepository(d.pool)
+
+	generateSuggestionsUC := recommendationApp.NewGenerateSuggestionsUseCase(
+		candidateSource, interestSource, historySource, engagementSource, qualitySource, suggestionStatsRepo, recommendationCache,
+	)
+	getSuggestionsUC := recommendationApp.NewGetSuggestionsUseCase(recommendationCache, generateSuggestionsUC, suggestionStatsRepo)
+	recommendationHandlers := recommendationHTTP.NewHandlers(getSuggestionsUC, generateSuggestionsUC)
+
+	// Background cache-refresh worker (Step 5, side A — periodic,
+	// not event-triggered). main.go starts this in its own
+	// goroutine and stops it on shutdown.
+	recommendationWorker := worker.New(
+		recommendationCache,
+		generateSuggestionsUC,
+		d.cfg.RecommendationRefreshInterval,
+		d.cfg.RecommendationStaleAfter,
+	)
+
 	// --- Archive domain wiring ---
 	archiveStore := archivePG.NewStore(d.pool) // implements domain.Transactor
 	archiveRepo := archivePG.NewArchiveRepository(d.pool)
@@ -310,8 +347,13 @@ func newRouter(d deps) *gin.Engine {
 	// cancel/complete without importing the archive module directly.
 	hangoutArchiveCreator := archivecreator.New(createArchiveUC)
 
+	// Same mirror-image shape as hangoutArchiveCreator above: lets
+	// Hangout tell Recommendation about an accepted suggestion
+	// without importing that module directly.
+	hangoutSuggestionAcceptance := suggestionacceptance.New(suggestionStatsRepo)
+
 	// --- Hangout domain wiring (use cases + handlers) ---
-	createHangoutUC := hangoutApp.NewCreateHangoutUseCase(hangoutRepo, participantRepo, hangoutStore)
+	createHangoutUC := hangoutApp.NewCreateHangoutUseCase(hangoutRepo, participantRepo, hangoutStore, hangoutSuggestionAcceptance)
 	getHangoutUC := hangoutApp.NewGetHangoutUseCase(hangoutRepo, participantRepo)
 	listHangoutsUC := hangoutApp.NewListHangoutsUseCase(hangoutRepo)
 	inviteParticipantsUC := hangoutApp.NewInviteParticipantsUseCase(hangoutRepo, participantRepo, hangoutNotifier)
@@ -449,6 +491,10 @@ func newRouter(d deps) *gin.Engine {
 	attendanceGroup.Use(authMW)
 	attendanceHandlers.RegisterRoutes(attendanceGroup)
 
+	recommendationGroup := router.Group("/recommendations")
+	recommendationGroup.Use(authMW)
+	recommendationHandlers.RegisterRoutes(recommendationGroup)
+
 	archiveGroup := router.Group("/archives")
 	archiveGroup.Use(authMW)
 	archiveHandlers.RegisterRoutes(archiveGroup)
@@ -457,7 +503,7 @@ func newRouter(d deps) *gin.Engine {
 	// doc comment in internal/archive/adapters/http/handler.go.
 	archiveHandlers.RegisterUploadPromptRoute(hangoutGroup)
 
-	return router
+	return router, recommendationWorker
 }
 
 // healthCheck pings every downstream dependency and reports the first

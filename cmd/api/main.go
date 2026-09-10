@@ -60,12 +60,22 @@ func main() {
 	}
 
 	// --- Router ---
-	router := newRouter(deps{
+	router, recommendationWorker := newRouter(deps{
 		cfg:         cfg,
 		pool:        pool,
 		redisClient: redisClient,
 		minioClient: minioClient,
 	})
+
+	// --- Background workers ---
+	// workerCtx is cancelled on the way out of main so the worker's
+	// loop stops cleanly. Note: this only runs if router.Run below
+	// returns normally — a log.Fatalf elsewhere in this file exits
+	// the process immediately and skips deferred cleanup, same as
+	// every other defer in this function.
+	workerCtx, cancelWorker := context.WithCancel(ctx)
+	defer cancelWorker()
+	go recommendationWorker.Start(workerCtx)
 
 	// --- Start server ---
 	log.Printf("starting server on :%s", cfg.Port)

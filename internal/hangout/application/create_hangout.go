@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/bLorax/khatere-backend/internal/hangout/domain"
@@ -9,13 +10,14 @@ import (
 )
 
 type CreateHangoutUseCase struct {
-	hangouts     domain.HangoutRepository
-	participants domain.ParticipantRepository
-	tx           domain.Transactor
+	hangouts             domain.HangoutRepository
+	participants         domain.ParticipantRepository
+	tx                   domain.Transactor
+	suggestionAcceptance domain.SuggestionAcceptanceRecorder
 }
 
-func NewCreateHangoutUseCase(hangouts domain.HangoutRepository, participants domain.ParticipantRepository, tx domain.Transactor) *CreateHangoutUseCase {
-	return &CreateHangoutUseCase{hangouts: hangouts, participants: participants, tx: tx}
+func NewCreateHangoutUseCase(hangouts domain.HangoutRepository, participants domain.ParticipantRepository, tx domain.Transactor, suggestionAcceptance domain.SuggestionAcceptanceRecorder) *CreateHangoutUseCase {
+	return &CreateHangoutUseCase{hangouts: hangouts, participants: participants, tx: tx, suggestionAcceptance: suggestionAcceptance}
 }
 
 type CreateHangoutInput struct {
@@ -68,6 +70,18 @@ func (uc *CreateHangoutUseCase) Execute(ctx context.Context, in CreateHangoutInp
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	// Best-effort, same reasoning as the notifications in
+	// CancelHangoutUseCase: the hangout is already created, so a
+	// failure here is logged, not returned. Only recorded when this
+	// hangout is actually organized around a tagged activity — a
+	// hangout with no ActivityID has nothing for the recommendation
+	// engine to reinforce.
+	if in.ActivityID != nil {
+		if err := uc.suggestionAcceptance.RecordAccepted(ctx, in.OrganizerID, *in.ActivityID); err != nil {
+			log.Printf("hangout: failed to record suggestion acceptance for user %s, activity %s: %v", in.OrganizerID, *in.ActivityID, err)
+		}
 	}
 
 	return hangout, nil

@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"time"
 )
 
 // Config holds all settings the app reads from the environment.
@@ -26,6 +27,13 @@ type Config struct {
 	// reasoning as DeepSeekAPIKey. See internal/comment/adapters/gapgpt.
 	GapGPTAPIKey string
 	GapGPTModel  string
+	// RecommendationRefreshInterval/RecommendationStaleAfter drive
+	// the background cache-refresh worker (Step 5): how often it
+	// wakes up, and how old a cached user's suggestions must be
+	// before that user is refreshed. See
+	// internal/recommendation/adapters/worker.
+	RecommendationRefreshInterval time.Duration
+	RecommendationStaleAfter      time.Duration
 }
 
 // Load reads all config values from the environment.
@@ -43,6 +51,9 @@ func Load() *Config {
 		DeepSeekAPIKey:     envOrDefault("DEEPSEEK_API_KEY", ""),
 		GapGPTAPIKey:       envOrDefault("GAPGPT_API_KEY", ""),
 		GapGPTModel:        envOrDefault("GAPGPT_MODEL", "gpt-4o-mini"),
+
+		RecommendationRefreshInterval: envDurationOrDefault("RECOMMENDATION_REFRESH_INTERVAL", 10*time.Minute),
+		RecommendationStaleAfter:      envDurationOrDefault("RECOMMENDATION_STALE_AFTER", 30*time.Minute),
 	}
 }
 
@@ -61,4 +72,21 @@ func envOrDefault(key, fallback string) string {
 		return val
 	}
 	return fallback
+}
+
+// envDurationOrDefault reads an optional env var as a Go duration
+// string (e.g. "10m", "30s"). It returns fallback if the var is
+// empty or fails to parse — a bad duration string should not stop
+// the whole server from starting, just fall back quietly.
+func envDurationOrDefault(key string, fallback time.Duration) time.Duration {
+	val := os.Getenv(key)
+	if val == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(val)
+	if err != nil {
+		log.Printf("config: invalid duration for %s (%q), using default %s", key, val, fallback)
+		return fallback
+	}
+	return d
 }
