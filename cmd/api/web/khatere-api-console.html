@@ -139,6 +139,7 @@
   section.batch.b1 { border-left-color: var(--rail-b); }
   section.batch.b5 { border-left-color: var(--rail-c); }
   section.batch.b7 { border-left-color: var(--rail-d); }
+  section.batch.b8 { border-left-color: var(--rail-a); }
 
   section.batch h2 {
     font-size: 15px;
@@ -408,7 +409,7 @@
 
   <header class="page">
     <h1>Khatere API console</h1>
-    <p>Runs every endpoint built so far — auth, user profiles, interests, host, moderator, circle, activity catalog + moderation, hangout planning, and the meetup pin — against a live API and shows the real request path and response for each step. The panel on the right always shows the exact JSON request each test sends, in run order, so you can scroll back and compare any two tests.</p>
+    <p>Runs every endpoint built so far — auth, user profiles, interests, host, moderator, circle, activity catalog + moderation, hangout planning, meetup pin, comments + voting, AI comment summaries, and attendance + badges — against a live API and shows the real request path and response for each step. The panel on the right always shows the exact JSON request each test sends, in run order, so you can scroll back and compare any two tests.</p>
   </header>
 
   <div class="controls">
@@ -473,8 +474,14 @@
     <div id="batch7Steps"></div>
   </section>
 
+  <section class="batch b8">
+    <h2>Batch 8 — Attendance Verification &amp; Badges</h2>
+    <p class="sub">Set up and read a host activity QR code, verify host-only access, create and read the one badge for the activity, scan the QR as a user, confirm repeated scans are idempotent, and check the caller's earned badge snapshots.</p>
+    <div id="batch8Steps"></div>
+  </section>
+
   <footer class="note">
-    Each run creates fresh test accounts using a timestamp, so it's safe to run this repeatedly without hitting duplicate email or handle conflicts. Click any step to see the exact request path and the raw response body. Click the ↦ button on a step to jump to its request in the right-hand panel.
+    Each run creates fresh test accounts using a timestamp, so it's safe to run this repeatedly without hitting duplicate email or handle conflicts. Batch 8 uses the approved host activity from Batch 2 and fresh user A, so the QR, badge, attendance verification, and earned-badge assertions are isolated per run. Click any step to see the exact request path and the raw response body. Click the ↦ button on a step to jump to its request in the right-hand panel.
   </footer>
 
 </div>
@@ -787,6 +794,10 @@
           business_name: "Console Test Venue " + RUN_ID,
           location_info: "123 Test Street",
         });
+        if (r.status === 201 && r.body) {
+          const accountId = r.body.AccountID || r.body.account_id;
+          if (accountId) setUser("HOST", { accountId });
+        }
         return { pass: r.status === 201, raw: r };
       }
     },
@@ -2055,6 +2066,285 @@
         return { pass: r.status === 400, raw: r };
       }
     },
+
+    // ---- Batch 8: Attendance Verification & Badges ----
+    // Uses the approved host activity from Batch 2. The host is
+    // circle_host; A is a normal user who will scan the QR and earn
+    // the badge. Each run creates fresh accounts, so A starts with
+    // no badges.
+
+    {
+      id: "att_qr_get_before_setup", batch: 8, title: "Host reads the QR code before setup — returns 404",
+      method: "GET", path: "/activities/:id/qrcode",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.actHostID + "/qrcode", u("HOST").token, null);
+        return { pass: r.status === 404, raw: r };
+      }
+    },
+    {
+      id: "att_qr_post_forbidden", batch: 8, title: "A non-host cannot create the activity QR code",
+      method: "POST", path: "/activities/:id/qrcode",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actHostID + "/qrcode", u("A").token, null);
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+    {
+      id: "att_qr_post_unauthorized", batch: 8, title: "Creating an activity QR code without a token is rejected",
+      method: "POST", path: "/activities/:id/qrcode",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actHostID + "/qrcode", null, null);
+        return { pass: r.status === 401, raw: r };
+      }
+    },
+    {
+      id: "att_qr_create", batch: 8, title: "Host creates the activity QR code",
+      method: "POST", path: "/activities/:id/qrcode",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actHostID + "/qrcode", u("HOST").token, null);
+        if (r.status === 200 && r.body) {
+          state.qrCodeID = r.body.ID || r.body.id;
+          state.qrCodeCode = r.body.Code || r.body.code;
+        }
+        const ok = r.status === 200 && r.body &&
+          state.qrCodeID && (r.body.ActivityID || r.body.activity_id) === state.actHostID &&
+          typeof state.qrCodeCode === "string" && state.qrCodeCode.length > 0 &&
+          !!(r.body.CreatedAt || r.body.created_at);
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "att_qr_create_twice_same", batch: 8, title: "Creating the QR code twice is safe — same id and same code",
+      method: "POST", path: "/activities/:id/qrcode",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actHostID + "/qrcode", u("HOST").token, null);
+        const id = r.body ? (r.body.ID || r.body.id) : null;
+        const code = r.body ? (r.body.Code || r.body.code) : null;
+        const ok = r.status === 200 && id === state.qrCodeID && code === state.qrCodeCode;
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "att_qr_get", batch: 8, title: "Host reads the QR code — gets the same code that was created",
+      method: "GET", path: "/activities/:id/qrcode",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.actHostID + "/qrcode", u("HOST").token, null);
+        const id = r.body ? (r.body.ID || r.body.id) : null;
+        const code = r.body ? (r.body.Code || r.body.code) : null;
+        const ok = r.status === 200 && id === state.qrCodeID && code === state.qrCodeCode;
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "att_qr_get_forbidden", batch: 8, title: "A non-host cannot read the activity QR code",
+      method: "GET", path: "/activities/:id/qrcode",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.actHostID + "/qrcode", u("A").token, null);
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+
+    // -- Badge setup --
+    {
+      id: "att_badge_get_before_setup", batch: 8, title: "Host reads the badge before setup — returns 404",
+      method: "GET", path: "/activities/:id/badge",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.actHostID + "/badge", u("HOST").token, null);
+        return { pass: r.status === 404, raw: r };
+      }
+    },
+    {
+      id: "att_badge_post_forbidden", batch: 8, title: "A non-host cannot create the activity badge",
+      method: "POST", path: "/activities/:id/badge",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actHostID + "/badge", u("A").token, {
+          name: "Should not be created",
+          icon_key: "badges/forbidden.svg",
+        });
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+    {
+      id: "att_badge_missing_name", batch: 8, title: "Creating a badge without a name is rejected",
+      method: "POST", path: "/activities/:id/badge",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actHostID + "/badge", u("HOST").token, {
+          icon_key: "badges/missing-name.svg",
+        });
+        return { pass: r.status === 400, raw: r };
+      }
+    },
+    {
+      id: "att_badge_post_unauthorized", batch: 8, title: "Creating an activity badge without a token is rejected",
+      method: "POST", path: "/activities/:id/badge",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actHostID + "/badge", null, {
+          name: "Unauthorized badge",
+        });
+        return { pass: r.status === 401, raw: r };
+      }
+    },
+    {
+      id: "att_badge_create", batch: 8, title: "Host creates the activity badge with a name and object-storage icon key",
+      method: "POST", path: "/activities/:id/badge",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actHostID + "/badge", u("HOST").token, {
+          name: "Weekend Explorer " + RUN_ID,
+          icon_key: "badges/weekend-explorer.svg",
+        });
+        if (r.status === 200 && r.body) {
+          state.badgeID = r.body.ID || r.body.id;
+          state.badgeName = r.body.Name || r.body.name;
+          state.badgeIconKey = r.body.IconKey || r.body.icon_key;
+        }
+        const version = r.body ? (r.body.Version || r.body.version) : null;
+        const activityID = r.body ? (r.body.ActivityID || r.body.activity_id) : null;
+        const createdBy = r.body ? (r.body.CreatedBy || r.body.created_by) : null;
+        const createdAt = r.body ? (r.body.CreatedAt || r.body.created_at) : null;
+        const updatedAt = r.body ? (r.body.UpdatedAt || r.body.updated_at) : null;
+        const ok = r.status === 200 && r.body &&
+          state.badgeID && activityID === state.actHostID && createdBy === u("HOST").accountId &&
+          state.badgeName === "Weekend Explorer " + RUN_ID &&
+          state.badgeIconKey === "badges/weekend-explorer.svg" &&
+          version === 1 && !!createdAt && !!updatedAt;
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "att_badge_create_twice_conflict", batch: 8, title: "Creating a second badge for the same activity returns 409",
+      method: "POST", path: "/activities/:id/badge",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actHostID + "/badge", u("HOST").token, {
+          name: "A second badge " + RUN_ID,
+          icon_key: "badges/second.svg",
+        });
+        return { pass: r.status === 409, raw: r };
+      }
+    },
+    {
+      id: "att_badge_get", batch: 8, title: "Host reads the badge and gets the configured fields",
+      method: "GET", path: "/activities/:id/badge",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.actHostID + "/badge", u("HOST").token, null);
+        const id = r.body ? (r.body.ID || r.body.id) : null;
+        const name = r.body ? (r.body.Name || r.body.name) : null;
+        const iconKey = r.body ? (r.body.IconKey || r.body.icon_key) : null;
+        const version = r.body ? (r.body.Version || r.body.version) : null;
+        const ok = r.status === 200 && id === state.badgeID &&
+          name === state.badgeName && iconKey === state.badgeIconKey && version === 1;
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "att_badge_get_forbidden", batch: 8, title: "A non-host cannot read the activity badge",
+      method: "GET", path: "/activities/:id/badge",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.actHostID + "/badge", u("A").token, null);
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+
+    // -- Attendance scan --
+    {
+      id: "att_user_badges_before_scan", batch: 8, title: "A starts with no earned badges",
+      method: "GET", path: "/user/badges",
+      run: async () => {
+        const r = await call("GET", "/user/badges", u("A").token, null);
+        return { pass: r.status === 200 && Array.isArray(r.body) && r.body.length === 0, raw: r };
+      }
+    },
+    {
+      id: "att_scan_unauthorized", batch: 8, title: "Scanning a QR code without a token is rejected",
+      method: "POST", path: "/attendance/scan",
+      run: async () => {
+        const r = await call("POST", "/attendance/scan", null, { code: state.qrCodeCode });
+        return { pass: r.status === 401, raw: r };
+      }
+    },
+    {
+      id: "att_scan_missing_code", batch: 8, title: "Scanning without a code is rejected",
+      method: "POST", path: "/attendance/scan",
+      run: async () => {
+        const r = await call("POST", "/attendance/scan", u("A").token, {});
+        return { pass: r.status === 400, raw: r };
+      }
+    },
+    {
+      id: "att_scan_invalid_code", batch: 8, title: "A mistyped or unknown QR code returns the same 400 error",
+      method: "POST", path: "/attendance/scan",
+      run: async () => {
+        const r = await call("POST", "/attendance/scan", u("A").token, { code: "definitely-not-a-real-qr-code" });
+        return { pass: r.status === 400, raw: r };
+      }
+    },
+    {
+      id: "att_scan_valid", batch: 8, title: "A scans the valid QR code and receives an attendance verification",
+      method: "POST", path: "/attendance/scan",
+      run: async () => {
+        const r = await call("POST", "/attendance/scan", u("A").token, { code: state.qrCodeCode });
+        if (r.status === 200 && r.body) {
+          state.attendanceVerificationID = r.body.ID || r.body.id;
+        }
+        const activityID = r.body ? (r.body.ActivityID || r.body.activity_id) : null;
+        const userID = r.body ? (r.body.UserID || r.body.user_id) : null;
+        const qrID = r.body ? (r.body.QRCodeID || r.body.qr_code_id) : null;
+        const verifiedAt = r.body ? (r.body.VerifiedAt || r.body.verified_at) : null;
+        const ok = r.status === 200 && r.body && state.attendanceVerificationID &&
+          activityID === state.actHostID && userID === u("A").accountId &&
+          qrID === state.qrCodeID && !!verifiedAt;
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "att_scan_twice_same_verification", batch: 8, title: "A scans the same QR code twice — same verification, no duplicate",
+      method: "POST", path: "/attendance/scan",
+      run: async () => {
+        const r = await call("POST", "/attendance/scan", u("A").token, { code: state.qrCodeCode });
+        const id = r.body ? (r.body.ID || r.body.id) : null;
+        const activityID = r.body ? (r.body.ActivityID || r.body.activity_id) : null;
+        const userID = r.body ? (r.body.UserID || r.body.user_id) : null;
+        const qrID = r.body ? (r.body.QRCodeID || r.body.qr_code_id) : null;
+        const ok = r.status === 200 && id === state.attendanceVerificationID &&
+          activityID === state.actHostID && userID === u("A").accountId && qrID === state.qrCodeID;
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "att_user_badges_after_scan", batch: 8, title: "A's earned-badge list contains the automatically awarded badge and frozen snapshots",
+      method: "GET", path: "/user/badges",
+      run: async () => {
+        const r = await call("GET", "/user/badges", u("A").token, null);
+        const badge = Array.isArray(r.body) ? r.body.find(x => {
+          const badgeID = x.BadgeID !== undefined ? x.BadgeID : x.badge_id;
+          const activityID = x.ActivityID !== undefined ? x.ActivityID : x.activity_id;
+          const name = x.NameSnapshot !== undefined ? x.NameSnapshot : x.name_snapshot;
+          const iconKey = x.IconKeySnapshot !== undefined ? x.IconKeySnapshot : x.icon_key_snapshot;
+          return badgeID === state.badgeID || (activityID === state.actHostID && name === state.badgeName && iconKey === state.badgeIconKey);
+        }) : null;
+        if (!badge) return { pass: false, raw: r };
+        const userID = badge.UserID !== undefined ? badge.UserID : badge.user_id;
+        const badgeID = badge.BadgeID !== undefined ? badge.BadgeID : badge.badge_id;
+        const activityID = badge.ActivityID !== undefined ? badge.ActivityID : badge.activity_id;
+        const name = badge.NameSnapshot !== undefined ? badge.NameSnapshot : badge.name_snapshot;
+        const iconKey = badge.IconKeySnapshot !== undefined ? badge.IconKeySnapshot : badge.icon_key_snapshot;
+        const visible = badge.Visible !== undefined ? badge.Visible : badge.visible;
+        const awardedAt = badge.AwardedAt !== undefined ? badge.AwardedAt : badge.awarded_at;
+        const ok = r.status === 200 && Array.isArray(r.body) &&
+          r.body.length === 1 && userID === u("A").accountId &&
+          badgeID === state.badgeID && activityID === state.actHostID &&
+          name === state.badgeName && iconKey === state.badgeIconKey &&
+          visible === true && !!awardedAt;
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "att_user_badges_unauthorized", batch: 8, title: "Earned badges require a valid auth token",
+      method: "GET", path: "/user/badges",
+      run: async () => {
+        const r = await call("GET", "/user/badges", null, null);
+        return { pass: r.status === 401, raw: r };
+      }
+    },
   ];
 
   // ---------- rendering ----------
@@ -2068,6 +2358,7 @@
     const b5 = document.getElementById("batch5Steps");
     const b6 = document.getElementById("batch6Steps");
     const b7 = document.getElementById("batch7Steps");
+    const b8 = document.getElementById("batch8Steps");
     b0.innerHTML = "";
     b1.innerHTML = "";
     b2.innerHTML = "";
@@ -2076,6 +2367,7 @@
     b5.innerHTML = "";
     b6.innerHTML = "";
     b7.innerHTML = "";
+    b8.innerHTML = "";
 
     allSteps.forEach((step, idx) => {
       const row = el(`
@@ -2094,7 +2386,7 @@
         </div>
       `);
       row.querySelector('[data-role="jump"]').addEventListener("click", () => jumpToRequest(step.id));
-      const container = step.batch === 0 ? b0 : step.batch === 1 ? b1 : step.batch === 2 ? b2 : step.batch === 3 ? b3 : step.batch === 4 ? b4 : step.batch === 5 ? b5 : step.batch === 6 ? b6 : b7;
+      const container = step.batch === 0 ? b0 : step.batch === 1 ? b1 : step.batch === 2 ? b2 : step.batch === 3 ? b3 : step.batch === 4 ? b4 : step.batch === 5 ? b5 : step.batch === 6 ? b6 : step.batch === 7 ? b7 : b8;
       container.appendChild(row);
     });
   }
@@ -2151,6 +2443,12 @@
     state.summaryActivityID = null;
     state.summaryCommentID1 = null;
     state.summaryCommentID2 = null;
+    state.qrCodeID = null;
+    state.qrCodeCode = null;
+    state.badgeID = null;
+    state.badgeName = null;
+    state.badgeIconKey = null;
+    state.attendanceVerificationID = null;
     passed = 0; failed = 0;
     currentStepMeta = null;
     clearRequestsPanel();

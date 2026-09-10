@@ -8,6 +8,18 @@ import (
 	"strings"
 	"time"
 
+	badgeHTTP "github.com/bLorax/khatere-backend/internal/badge/adapters/http"
+	badgePG "github.com/bLorax/khatere-backend/internal/badge/adapters/postgres"
+	badgeApp "github.com/bLorax/khatere-backend/internal/badge/application"
+
+	attendanceHTTP "github.com/bLorax/khatere-backend/internal/attendance/adapters/http"
+	attendancePG "github.com/bLorax/khatere-backend/internal/attendance/adapters/postgres"
+	attendanceApp "github.com/bLorax/khatere-backend/internal/attendance/application"
+
+	userbadgeHTTP "github.com/bLorax/khatere-backend/internal/userbadge/adapters/http"
+	userbadgePG "github.com/bLorax/khatere-backend/internal/userbadge/adapters/postgres"
+	userbadgeApp "github.com/bLorax/khatere-backend/internal/userbadge/application"
+
 	deepseek "github.com/bLorax/khatere-backend/internal/comment/adapters/deepseek"
 	gapgpt "github.com/bLorax/khatere-backend/internal/comment/adapters/gapgpt"
 	commentHTTP "github.com/bLorax/khatere-backend/internal/comment/adapters/http"
@@ -30,6 +42,10 @@ import (
 	ratingHTTP "github.com/bLorax/khatere-backend/internal/rating/adapters/http"
 	ratingPG "github.com/bLorax/khatere-backend/internal/rating/adapters/postgres"
 	ratingApp "github.com/bLorax/khatere-backend/internal/rating/application"
+
+	qrcodeHTTP "github.com/bLorax/khatere-backend/internal/qrcode/adapters/http"
+	qrcodePG "github.com/bLorax/khatere-backend/internal/qrcode/adapters/postgres"
+	qrcodeApp "github.com/bLorax/khatere-backend/internal/qrcode/application"
 
 	hangoutHTTP "github.com/bLorax/khatere-backend/internal/hangout/adapters/http"
 	hangoutNotif "github.com/bLorax/khatere-backend/internal/hangout/adapters/notification"
@@ -202,6 +218,42 @@ func newRouter(d deps) *gin.Engine {
 	getRatingSummaryUC := ratingApp.NewGetRatingSummaryUseCase(ratingRepo)
 	ratingHandlers := ratingHTTP.NewHandlers(createRatingUC, getRatingSummaryUC)
 
+	// --- QRCode domain wiring ---
+	// activityRepo satisfies qrcodeApp.ActivityOwnershipChecker via
+	// its IsOwnedByHost method — see internal/activity/adapters/postgres.
+	qrCodeRepo := qrcodePG.NewQRCodeRepository(d.pool)
+	generateQRCodeUC := qrcodeApp.NewGenerateQRCodeUseCase(qrCodeRepo, activityRepo)
+	getQRCodeUC := qrcodeApp.NewGetQRCodeUseCase(qrCodeRepo, activityRepo)
+	qrCodeHandlers := qrcodeHTTP.NewHandlers(generateQRCodeUC, getQRCodeUC)
+
+	// --- Badge domain wiring ---
+	// activityRepo satisfies badgeApp.ActivityOwnershipChecker via
+	// its IsOwnedByHost method, same as the qrcode domain.
+	badgeRepo := badgePG.NewBadgeRepository(d.pool)
+	createBadgeUC := badgeApp.NewCreateBadgeUseCase(badgeRepo, activityRepo)
+	getBadgeUC := badgeApp.NewGetBadgeUseCase(badgeRepo, activityRepo)
+	badgeHandlers := badgeHTTP.NewHandlers(createBadgeUC, getBadgeUC)
+
+	// --- UserBadge domain wiring ---
+	// badgeLookupRepo is a purpose-built adapter satisfying
+	// userbadgeApp.BadgeLookup, so this domain never imports
+	// badge/domain directly — see badge_lookup_repository.go.
+	userBadgeRepo := userbadgePG.NewUserBadgeRepository(d.pool)
+	badgeLookupRepo := userbadgePG.NewBadgeLookupRepository(d.pool)
+	awardBadgeUC := userbadgeApp.NewAwardBadgeUseCase(userBadgeRepo, badgeLookupRepo)
+	listUserBadgesUC := userbadgeApp.NewListUserBadgesUseCase(userBadgeRepo)
+	userBadgeHandlers := userbadgeHTTP.NewHandlers(listUserBadgesUC)
+
+	// --- Attendance domain wiring ---
+	// awardBadgeUC satisfies attendanceApp.BadgeAwarder via its
+	// AwardIfBadgeExists method. qrCodeLookupRepo is the
+	// attendance package's own ResolveCode adapter over the
+	// qr_codes table — not the qrcode domain's repository.
+	attendanceRepo := attendancePG.NewAttendanceVerificationRepository(d.pool)
+	qrCodeLookupRepo := attendancePG.NewQRCodeRepository(d.pool)
+	verifyScanUC := attendanceApp.NewVerifyScanUseCase(attendanceRepo, qrCodeLookupRepo, awardBadgeUC)
+	attendanceHandlers := attendanceHTTP.NewHandlers(verifyScanUC)
+
 	// --- Comment domain wiring ---
 	commentRepo := commentPG.NewCommentRepository(d.pool)
 	commentVoteRepo := commentPG.NewCommentVoteRepository(d.pool)
@@ -226,7 +278,11 @@ func newRouter(d deps) *gin.Engine {
 	}
 
 	createCommentUC := commentApp.NewCreateCommentUseCase(commentRepo)
-	listCommentsUC := commentApp.NewListCommentsUseCase(commentRepo, commentVoteRepo)
+	listCommentsUC := commentApp.NewListCommentsUseCase(
+		commentRepo,
+		commentVoteRepo,
+		attendanceRepo,
+	)
 	voteCommentUC := commentApp.NewVoteCommentUseCase(commentRepo, commentVoteRepo)
 	listCommentModerationUC := commentApp.NewListCommentModerationQueueUseCase(commentRepo)
 	regenerateSummaryUC := commentApp.NewRegenerateCommentSummaryUseCase(commentRepo, commentSummaryRepo, commentSummarizer)
@@ -351,6 +407,7 @@ func newRouter(d deps) *gin.Engine {
 	usersGroup := router.Group("/users")
 	usersGroup.Use(authMW)
 	userPublicHandlers.RegisterRoutes(usersGroup)
+	userBadgeHandlers.RegisterRoutes(userGroup)
 
 	hostGroup := router.Group("/host")
 	hostGroup.Use(authMW)
@@ -373,6 +430,9 @@ func newRouter(d deps) *gin.Engine {
 	ratingGroup := activityGroup.Group("/:id")
 	ratingHandlers.RegisterRoutes(ratingGroup)
 
+	qrCodeHandlers.RegisterRoutes(ratingGroup) // reuse activityGroup.Group("/:id")
+	badgeHandlers.RegisterRoutes(ratingGroup)
+
 	commentHandlers.RegisterRoutes(ratingGroup) // reuse activityGroup.Group("/:id")
 
 	commentVoteGroup := router.Group("/comment")
@@ -384,6 +444,10 @@ func newRouter(d deps) *gin.Engine {
 	hangoutGroup := router.Group("/hangouts")
 	hangoutGroup.Use(authMW)
 	hangoutHandlers.RegisterRoutes(hangoutGroup)
+
+	attendanceGroup := router.Group("/attendance")
+	attendanceGroup.Use(authMW)
+	attendanceHandlers.RegisterRoutes(attendanceGroup)
 
 	archiveGroup := router.Group("/archives")
 	archiveGroup.Use(authMW)

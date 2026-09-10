@@ -107,6 +107,23 @@ func (r *ActivityRepository) Update(ctx context.Context, a *domain.Activity) err
 	return nil
 }
 
+// IsOwnedByHost reports whether activityID is a host-sourced
+// activity created by hostAccountID. Used by the qrcode and badge
+// domains (via their own small ActivityOwnershipChecker interface,
+// same pattern as rating's AttendanceChecker) so they don't import
+// this package's domain types directly.
+func (r *ActivityRepository) IsOwnedByHost(ctx context.Context, activityID, hostAccountID uuid.UUID) (bool, error) {
+	var owned bool
+	err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM activities
+			WHERE id = $1 AND created_by = $2
+			  AND source_type = 'host' AND deleted_at IS NULL
+		)
+	`, activityID, hostAccountID).Scan(&owned)
+	return owned, err
+}
+
 func scanActivity(row pgx.Row) (*domain.Activity, error) {
 	var a domain.Activity
 	var metaBytes []byte
