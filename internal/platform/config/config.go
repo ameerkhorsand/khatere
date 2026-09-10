@@ -13,6 +13,7 @@ type Config struct {
 	JWTSecret          string
 	RedisAddr          string
 	MinIOEndpoint      string
+	MinIOPublicURL     string
 	MinIORootUser      string
 	MinIORootPassword  string
 	ArchiveMediaBucket string
@@ -44,6 +45,7 @@ func Load() *Config {
 		JWTSecret:          mustEnv("JWT_SECRET"),
 		RedisAddr:          mustEnv("REDIS_ADDR"),
 		MinIOEndpoint:      mustEnv("MINIO_ENDPOINT"),
+		MinIOPublicURL:     envOrDefault("MINIO_PUBLIC_URL", "http://localhost:9000"),
 		MinIORootUser:      mustEnv("MINIO_ROOT_USER"),
 		MinIORootPassword:  mustEnv("MINIO_ROOT_PASSWORD"),
 		ArchiveMediaBucket: envOrDefault("ARCHIVE_MEDIA_BUCKET", "archive-media"),

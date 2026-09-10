@@ -1,11 +1,11 @@
-// Package archiveminio implements domain.MediaStorage using the
-// shared MinIO client from internal/platform/minio.
 package archiveminio
 
 import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
+	"time"
 
 	miniogo "github.com/minio/minio-go/v7"
 
@@ -15,12 +15,13 @@ import (
 )
 
 type Storage struct {
-	client *miniogo.Client
-	bucket string
+	client       *miniogo.Client // internal Docker-network client — Upload/Delete
+	publicClient *miniogo.Client // public-host client — PublicURL signing only
+	bucket       string
 }
 
-func New(client *miniogo.Client, bucket string) *Storage {
-	return &Storage{client: client, bucket: bucket}
+func New(client *miniogo.Client, publicClient *miniogo.Client, bucket string) *Storage {
+	return &Storage{client: client, publicClient: publicClient, bucket: bucket}
 }
 
 // Upload stores the file under archives/<archiveID>/<uuid>-<filename>
@@ -54,4 +55,17 @@ func contentTypeFor(mediaType domain.MediaType) string {
 	default:
 		return "application/octet-stream"
 	}
+}
+
+// PublicURL returns a time-limited URL the frontend can open
+// directly to fetch the object. Signing happens locally — no
+// network call is made — so publicClient's host never needs to be
+// reachable from inside this process.
+func (s *Storage) PublicURL(ctx context.Context, storageKey string) (string, error) {
+	reqParams := url.Values{}
+	presignedURL, err := s.publicClient.PresignedGetObject(ctx, s.bucket, storageKey, 15*time.Minute, reqParams)
+	if err != nil {
+		return "", err
+	}
+	return presignedURL.String(), nil
 }

@@ -39,11 +39,16 @@ func main() {
 	// --- MinIO ---
 	minioClient, err := miniocl.NewClient(cfg.MinIOEndpoint, cfg.MinIORootUser, cfg.MinIORootPassword)
 	if err != nil {
-		log.Fatalf("failed to build minio client: %v", err)
+		log.Fatalf("minio client: %v", err)
 	}
 
-	if err := miniocl.Ping(ctx, minioClient); err != nil {
-		log.Fatalf("minio ping failed: %v", err)
+	publicHost, publicSecure, err := miniocl.ParsePublicURL(cfg.MinIOPublicURL)
+	if err != nil {
+		log.Fatalf("minio public url: %v", err)
+	}
+	minioPublicClient, err := miniocl.NewClientWithOptions(publicHost, cfg.MinIORootUser, cfg.MinIORootPassword, publicSecure)
+	if err != nil {
+		log.Fatalf("minio public client: %v", err)
 	}
 
 	// Ensure the archive media bucket exists — MinIO does not create
@@ -61,10 +66,11 @@ func main() {
 
 	// --- Router ---
 	router, recommendationWorker := newRouter(deps{
-		cfg:         cfg,
-		pool:        pool,
-		redisClient: redisClient,
-		minioClient: minioClient,
+		cfg:               cfg,
+		pool:              pool,
+		redisClient:       redisClient,
+		minioClient:       minioClient,
+		minioPublicClient: minioPublicClient,
 	})
 
 	// --- Background workers ---

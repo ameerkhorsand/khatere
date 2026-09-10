@@ -131,4 +131,9 @@ type MediaStorage interface {
 	// Delete removes a previously uploaded file. Used by the purge
 	// use case (Step 7).
 	Delete(ctx context.Context, storageKey string) error
+
+	// PublicURL turns a storage key into a URL the frontend can
+	// open directly. The URL is time-limited — do not store it,
+	// generate it fresh on each read.
+	PublicURL(ctx context.Context, storageKey string) (string, error)
 }

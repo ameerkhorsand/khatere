@@ -96,10 +96,11 @@ var apiTesterHTML []byte
 // deps bundles the already-connected infrastructure clients that the
 // router needs. main.go builds this after it has pinged everything.
 type deps struct {
-	cfg         *config.Config
-	pool        *pgxpool.Pool
-	redisClient *goredis.Client
-	minioClient *miniogo.Client
+	cfg               *config.Config
+	pool              *pgxpool.Pool
+	redisClient       *goredis.Client
+	minioClient       *miniogo.Client
+	minioPublicClient *miniogo.Client
 }
 
 // newRouter wires every bounded context's repositories, use cases, and
@@ -340,7 +341,7 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
 	deletionMarkRepo := archivePG.NewDeletionMarkRepository(d.pool)
 
 	archiveHangoutGateway := archivegateway.New(hangoutRepo, participantRepo, messageRepo)
-	archiveStorage := archiveminio.New(d.minioClient, d.cfg.ArchiveMediaBucket)
+	archiveStorage := archiveminio.New(d.minioClient, d.minioPublicClient, d.cfg.ArchiveMediaBucket)
 	createArchiveUC := archiveApp.NewCreateArchiveUseCase(archiveRepo, archiveHangoutGateway)
 
 	// Mirror-image gateway: lets Hangout trigger archive creation on
@@ -384,7 +385,7 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
 
 	archiveHandlers := archiveHTTP.NewHandlers(
 		listArchivesUC, getArchiveUC, uploadMediaUC,
-		deleteArchiveUC, listPendingPromptsUC,
+		deleteArchiveUC, listPendingPromptsUC, archiveStorage,
 	)
 
 	// --- Router ---

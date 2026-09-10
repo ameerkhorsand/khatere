@@ -1,9 +1,11 @@
 package http
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/bLorax/khatere-backend/internal/archive/application"
 	"github.com/bLorax/khatere-backend/internal/archive/domain"
@@ -17,6 +19,7 @@ type Handlers struct {
 	uploadMedia        *application.UploadMediaUseCase
 	deleteArchive      *application.DeleteArchiveUseCase
 	listPendingPrompts *application.ListPendingUploadPromptsUseCase
+	storage            domain.MediaStorage
 }
 
 func NewHandlers(
@@ -25,6 +28,7 @@ func NewHandlers(
 	uploadMedia *application.UploadMediaUseCase,
 	deleteArchive *application.DeleteArchiveUseCase,
 	listPendingPrompts *application.ListPendingUploadPromptsUseCase,
+	storage domain.MediaStorage,
 ) *Handlers {
 	return &Handlers{
 		listArchives:       listArchives,
@@ -32,7 +36,57 @@ func NewHandlers(
 		uploadMedia:        uploadMedia,
 		deleteArchive:      deleteArchive,
 		listPendingPrompts: listPendingPrompts,
+		storage:            storage,
 	}
+}
+
+// mediaResponse is what the frontend receives for one ArchiveMedia
+// record. StorageKey never leaves this service — it is an internal
+// MinIO object key, not something the frontend should see or use.
+type mediaResponse struct {
+	ID              uuid.UUID `json:"ID"`
+	ArchiveID       uuid.UUID `json:"ArchiveID"`
+	UploaderID      uuid.UUID `json:"UploaderID"`
+	MediaType       string    `json:"MediaType"`
+	URL             string    `json:"URL"`
+	DurationSeconds *int      `json:"DurationSeconds,omitempty"`
+	CreatedAt       time.Time `json:"CreatedAt"`
+}
+
+type archiveDetailResponse struct {
+	Archive domain.Archive  `json:"Archive"`
+	Media   []mediaResponse `json:"Media"`
+}
+
+// toMediaResponse converts one domain record into the shape the
+// frontend expects, resolving StorageKey into a fresh URL.
+func toMediaResponse(ctx context.Context, storage domain.MediaStorage, m domain.ArchiveMedia) (mediaResponse, error) {
+	url, err := storage.PublicURL(ctx, m.StorageKey)
+	if err != nil {
+		return mediaResponse{}, err
+	}
+	return mediaResponse{
+		ID:              m.ID,
+		ArchiveID:       m.ArchiveID,
+		UploaderID:      m.UploaderID,
+		MediaType:       string(m.MediaType),
+		URL:             url,
+		DurationSeconds: m.DurationSeconds,
+		CreatedAt:       m.CreatedAt,
+	}, nil
+}
+
+// toMediaResponseList converts a slice, stopping at the first error.
+func toMediaResponseList(ctx context.Context, storage domain.MediaStorage, media []domain.ArchiveMedia) ([]mediaResponse, error) {
+	out := make([]mediaResponse, 0, len(media))
+	for _, m := range media {
+		r, err := toMediaResponse(ctx, storage, m)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, nil
 }
 
 // RegisterRoutes mounts the archive endpoints under the given group,
@@ -131,12 +185,13 @@ func (h *Handlers) GetArchive(c *gin.Context) {
 		ArchiveID:   id,
 		RequesterID: requesterID,
 	})
+	mediaResp, err := toMediaResponseList(c.Request.Context(), h.storage, detail.Media)
 	if err != nil {
-		handleUseCaseError(c, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
 
-	c.JSON(http.StatusOK, detail)
+	c.JSON(http.StatusOK, archiveDetailResponse{Archive: detail.Archive, Media: mediaResp})
 }
 
 // -----------------------------------------------------------------
@@ -191,12 +246,13 @@ func (h *Handlers) UploadMedia(c *gin.Context) {
 		SizeBytes:       fileHeader.Size,
 		DurationSeconds: duration,
 	})
+	resp, err := toMediaResponse(c.Request.Context(), h.storage, *media)
 	if err != nil {
-		handleUseCaseError(c, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
 
-	c.JSON(http.StatusCreated, media)
+	c.JSON(http.StatusCreated, resp)
 }
 
 // -----------------------------------------------------------------
