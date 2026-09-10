@@ -19,6 +19,7 @@
     --rail-a: #6c8cff;
     --rail-b: #b389f5;
     --rail-c: #4fc9c0;
+    --rail-d: #e07bb3;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   }
@@ -137,6 +138,7 @@
 
   section.batch.b1 { border-left-color: var(--rail-b); }
   section.batch.b5 { border-left-color: var(--rail-c); }
+  section.batch.b7 { border-left-color: var(--rail-d); }
 
   section.batch h2 {
     font-size: 15px;
@@ -459,6 +461,18 @@
     <div id="batch5Steps"></div>
   </section>
 
+  <section class="batch b6">
+    <h2>Batch 6 — Ratings, Comments &amp; Voting</h2>
+    <p class="sub">Build a fresh completed, activity-linked hangout so A and B count as attendees. Rate the activity (attendee-only, 0.5-step validation, re-rating updates the average). Post comments as any user (moderation-gated, empty-body rejected). Approve/reject through the moderator queue. Vote comments up/down and check the 70%-of-votes ranking score updates and re-voting replaces the old vote.</p>
+    <div id="batch6Steps"></div>
+  </section>
+
+  <section class="batch b7">
+    <h2>Batch 7 — AI Comment Summary (DeepSeek)</h2>
+    <p class="sub">Confirms the summary starts unavailable, stays unavailable while comments are only pending, and is generated (then regenerated) automatically each time a moderator approves a comment. A step failing at "after one approval" or "after two approvals" most likely means DEEPSEEK_API_KEY isn't set on this server, rather than a logic bug — check the container logs for the "AI comment summaries are disabled" line.</p>
+    <div id="batch7Steps"></div>
+  </section>
+
   <footer class="note">
     Each run creates fresh test accounts using a timestamp, so it's safe to run this repeatedly without hitting duplicate email or handle conflicts. Click any step to see the exact request path and the raw response body. Click the ↦ button on a step to jump to its request in the right-hand panel.
   </footer>
@@ -495,6 +509,9 @@
     actModID: null,
     archiveID: null,       // Batch 5 — the archive for Batch 3's now-cancelled hangout
     archiveMediaID: null,  // Batch 5 — B's uploaded photo
+    rtHgID: null,          // Batch 6 — hangout linked to actHostID, driven to completed
+    rtCommentC: null,      // Batch 6 — C's comment, gets approved and voted on
+    rtCommentB: null,      // Batch 6 — B's comment, gets rejected
   };
 
   let passed = 0, failed = 0;
@@ -1630,6 +1647,414 @@
         return { pass: r.status === 404, raw: r };
       }
     },
+
+    // ---- Batch 6: Ratings, Comments & Voting ----
+    // Setup: a hangout linked to actHostID (the host's approved activity
+    // from Batch 2), driven planned -> ongoing -> completed, with A and
+    // B both accepted. This is what "attended" means for rating.
+    {
+      id: "rt_create_hangout", batch: 6, title: "A creates a hangout linked to the host activity (activity_id round-trips — regression check for the dropped-field fix)",
+      method: "POST", path: "/hangouts",
+      run: async () => {
+        const r = await call("POST", "/hangouts", u("A").token, {
+          title: "Rating test hangout " + RUN_ID,
+          activity_id: state.actHostID,
+        });
+        if (r.status === 201 && r.body) state.rtHgID = r.body.ID || r.body.id;
+        const ok = r.status === 201 && r.body && r.body.Status === "planned"
+          && (r.body.ActivityID === state.actHostID);
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "rt_invite_b", batch: 6, title: "A invites B",
+      method: "POST", path: "/hangouts/:id/invites",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.rtHgID + "/invites", u("A").token, {
+          user_ids: [u("B").accountId],
+        });
+        return { pass: r.status === 200, raw: r };
+      }
+    },
+    {
+      id: "rt_accept_b", batch: 6, title: "B accepts — A and B are both now accepted participants",
+      method: "POST", path: "/hangouts/:id/invites/respond",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.rtHgID + "/invites/respond", u("B").token, {
+          accept: true,
+        });
+        return { pass: r.status === 200 && r.body && r.body.InviteStatus === "accepted", raw: r };
+      }
+    },
+    {
+      id: "rt_advance_ongoing", batch: 6, title: "A advances the hangout to ongoing",
+      method: "POST", path: "/hangouts/:id/status",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.rtHgID + "/status", u("A").token, {
+          status: "ongoing",
+        });
+        return { pass: r.status === 200 && r.body && r.body.Status === "ongoing", raw: r };
+      }
+    },
+    {
+      id: "rt_advance_completed", batch: 6, title: "A advances the hangout to completed — A and B now count as attendees of the linked activity",
+      method: "POST", path: "/hangouts/:id/status",
+      run: async () => {
+        const r = await call("POST", "/hangouts/" + state.rtHgID + "/status", u("A").token, {
+          status: "completed",
+        });
+        return { pass: r.status === 200 && r.body && r.body.Status === "completed", raw: r };
+      }
+    },
+
+    // -- Rating --
+    {
+      id: "rt_rate_non_attendee_forbidden", batch: 6, title: "C (never attended) cannot rate the activity",
+      method: "POST", path: "/activities/:id/rating",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actHostID + "/rating", u("C").token, { score: 4 });
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+    {
+      id: "rt_rate_invalid_step", batch: 6, title: "A score that isn't a 0.5 step is rejected",
+      method: "POST", path: "/activities/:id/rating",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actHostID + "/rating", u("A").token, { score: 2.3 });
+        return { pass: r.status === 400, raw: r };
+      }
+    },
+    {
+      id: "rt_rate_out_of_range", batch: 6, title: "A score above 5 is rejected",
+      method: "POST", path: "/activities/:id/rating",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actHostID + "/rating", u("A").token, { score: 5.5 });
+        return { pass: r.status === 400, raw: r };
+      }
+    },
+    {
+      id: "rt_rate_a", batch: 6, title: "A (attendee) rates the activity 4.5",
+      method: "POST", path: "/activities/:id/rating",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actHostID + "/rating", u("A").token, { score: 4.5 });
+        return { pass: r.status === 201 && r.body && r.body.Score === 4.5, raw: r };
+      }
+    },
+    {
+      id: "rt_rate_b", batch: 6, title: "B (attendee) rates the activity 3.0",
+      method: "POST", path: "/activities/:id/rating",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actHostID + "/rating", u("B").token, { score: 3 });
+        return { pass: r.status === 201 && r.body && r.body.Score === 3, raw: r };
+      }
+    },
+    {
+      id: "rt_summary_after_two", batch: 6, title: "Rating summary — average 3.75 across 2 ratings",
+      method: "GET", path: "/activities/:id/rating",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.actHostID + "/rating", u("A").token, null);
+        const ok = r.status === 200 && r.body && r.body.Count === 2 && Math.abs(r.body.Average - 3.75) < 0.001;
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "rt_rerate_a_updates", batch: 6, title: "A re-rates to 5.0 — this updates A's rating, it doesn't add a third one",
+      method: "POST", path: "/activities/:id/rating",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actHostID + "/rating", u("A").token, { score: 5 });
+        return { pass: r.status === 201 && r.body && r.body.Score === 5, raw: r };
+      }
+    },
+    {
+      id: "rt_summary_after_rerate", batch: 6, title: "Rating summary — still 2 ratings, average now 4.0",
+      method: "GET", path: "/activities/:id/rating",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.actHostID + "/rating", u("A").token, null);
+        const ok = r.status === 200 && r.body && r.body.Count === 2 && Math.abs(r.body.Average - 4.0) < 0.001;
+        return { pass: ok, raw: r };
+      }
+    },
+
+    // -- Comments --
+    {
+      id: "cm_create_by_c", batch: 6, title: "C (never attended) can comment — comments aren't attendee-only, and start pending",
+      method: "POST", path: "/activities/:id/comment",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actHostID + "/comment", u("C").token, {
+          body: "Looks like a fun spot, might check it out " + RUN_ID,
+        });
+        if (r.status === 201 && r.body) state.rtCommentC = r.body.ID || r.body.id;
+        return { pass: r.status === 201 && r.body && r.body.Status === "pending", raw: r };
+      }
+    },
+    {
+      id: "cm_empty_body_rejected", batch: 6, title: "An empty comment body is rejected",
+      method: "POST", path: "/activities/:id/comment",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actHostID + "/comment", u("A").token, { body: "" });
+        return { pass: r.status === 400, raw: r };
+      }
+    },
+    {
+      id: "cm_list_excludes_pending", batch: 6, title: "Public comment list does not show C's still-pending comment",
+      method: "GET", path: "/activities/:id/comment",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.actHostID + "/comment", u("A").token, null);
+        const text = r.body ? JSON.stringify(r.body) : "";
+        return { pass: r.status === 200 && !text.includes(state.rtCommentC), raw: r };
+      }
+    },
+    {
+      id: "cm_queue_forbidden_for_non_mod", batch: 6, title: "Non-moderator cannot see the comment moderation queue",
+      method: "GET", path: "/moderator/comment/queue",
+      run: async () => {
+        const r = await call("GET", "/moderator/comment/queue", u("A").token, null);
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+    {
+      id: "cm_approve_forbidden_for_non_mod", batch: 6, title: "Non-moderator cannot approve a comment",
+      method: "POST", path: "/moderator/comment/:id/approve",
+      run: async () => {
+        const r = await call("POST", "/moderator/comment/" + state.rtCommentC + "/approve", u("A").token, null);
+        return { pass: r.status === 403, raw: r };
+      }
+    },
+    {
+      id: "cm_queue_has_c", batch: 6, title: "Moderator's queue shows C's pending comment",
+      method: "GET", path: "/moderator/comment/queue",
+      run: async () => {
+        const r = await call("GET", "/moderator/comment/queue", u("MOD").token, null);
+        const text = r.body ? JSON.stringify(r.body) : "";
+        return { pass: r.status === 200 && text.includes(state.rtCommentC), raw: r };
+      }
+    },
+    {
+      id: "cm_approve_c", batch: 6, title: "Moderator approves C's comment",
+      method: "POST", path: "/moderator/comment/:id/approve",
+      run: async () => {
+        const r = await call("POST", "/moderator/comment/" + state.rtCommentC + "/approve", u("MOD").token, null);
+        return { pass: r.status === 200 && r.body && r.body.Status === "approved", raw: r };
+      }
+    },
+    {
+      id: "cm_approve_twice_conflict", batch: 6, title: "Approving an already-approved comment is rejected",
+      method: "POST", path: "/moderator/comment/:id/approve",
+      run: async () => {
+        const r = await call("POST", "/moderator/comment/" + state.rtCommentC + "/approve", u("MOD").token, null);
+        return { pass: r.status === 409, raw: r };
+      }
+    },
+    {
+      id: "cm_create_by_b_then_reject", batch: 6, title: "B posts a second comment, moderator rejects it",
+      method: "POST", path: "/activities/:id/comment",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.actHostID + "/comment", u("B").token, {
+          body: "Not really my thing " + RUN_ID,
+        });
+        if (r.status === 201 && r.body) state.rtCommentB = r.body.ID || r.body.id;
+        if (!state.rtCommentB) return { pass: false, raw: r };
+        const rej = await call("POST", "/moderator/comment/" + state.rtCommentB + "/reject", u("MOD").token, null);
+        return { pass: rej.status === 200 && rej.body && rej.body.Status === "rejected", raw: rej };
+      }
+    },
+    {
+      id: "cm_list_shows_approved_only", batch: 6, title: "Public comment list now shows C's approved comment, still not B's rejected one",
+      method: "GET", path: "/activities/:id/comment",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.actHostID + "/comment", u("A").token, null);
+        const text = r.body ? JSON.stringify(r.body) : "";
+        const ok = r.status === 200 && text.includes(state.rtCommentC) && !text.includes(state.rtCommentB);
+        return { pass: ok, raw: r };
+      }
+    },
+
+    // -- Voting --
+    {
+      id: "cv_vote_invalid_value", batch: 6, title: "A vote value other than 1 or -1 is rejected",
+      method: "POST", path: "/comment/:id/vote",
+      run: async () => {
+        const r = await call("POST", "/comment/" + state.rtCommentC + "/vote", u("A").token, { value: 5 });
+        return { pass: r.status === 400, raw: r };
+      }
+    },
+    {
+      id: "cv_vote_missing_comment_404", batch: 6, title: "Voting on a comment that doesn't exist returns 404",
+      method: "POST", path: "/comment/:id/vote",
+      run: async () => {
+        const r = await call("POST", "/comment/00000000-0000-0000-0000-000000000000/vote", u("A").token, { value: 1 });
+        return { pass: r.status === 404, raw: r };
+      }
+    },
+    {
+      id: "cv_vote_up_by_a", batch: 6, title: "A upvotes C's comment",
+      method: "POST", path: "/comment/:id/vote",
+      run: async () => {
+        const r = await call("POST", "/comment/" + state.rtCommentC + "/vote", u("A").token, { value: 1 });
+        return { pass: r.status === 200, raw: r };
+      }
+    },
+    {
+      id: "cv_score_after_one_upvote", batch: 6, title: "Ranked list — 1 upvote gives a score of 0.7 (70% of net votes)",
+      method: "GET", path: "/activities/:id/comment",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.actHostID + "/comment", u("A").token, null);
+        const row = Array.isArray(r.body) ? r.body.find(x => x.Comment && x.Comment.ID === state.rtCommentC) : null;
+        const ok = r.status === 200 && row && row.Upvotes === 1 && row.Downvotes === 0 && Math.abs(row.Score - 0.7) < 0.001;
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "cv_vote_down_by_b", batch: 6, title: "B downvotes the same comment",
+      method: "POST", path: "/comment/:id/vote",
+      run: async () => {
+        const r = await call("POST", "/comment/" + state.rtCommentC + "/vote", u("B").token, { value: -1 });
+        return { pass: r.status === 200, raw: r };
+      }
+    },
+    {
+      id: "cv_score_after_split_vote", batch: 6, title: "Ranked list — one up, one down nets to a score of 0",
+      method: "GET", path: "/activities/:id/comment",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.actHostID + "/comment", u("A").token, null);
+        const row = Array.isArray(r.body) ? r.body.find(x => x.Comment && x.Comment.ID === state.rtCommentC) : null;
+        const ok = r.status === 200 && row && row.Upvotes === 1 && row.Downvotes === 1 && row.Score === 0;
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "cv_revote_replaces_old_vote", batch: 6, title: "B changes their vote to an upvote — replaces the downvote, doesn't add a second vote",
+      method: "POST", path: "/comment/:id/vote",
+      run: async () => {
+        const r = await call("POST", "/comment/" + state.rtCommentC + "/vote", u("B").token, { value: 1 });
+        return { pass: r.status === 200, raw: r };
+      }
+    },
+    {
+      id: "cv_score_after_revote", batch: 6, title: "Ranked list — 2 upvotes, 0 downvotes, score 1.4",
+      method: "GET", path: "/activities/:id/comment",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.actHostID + "/comment", u("A").token, null);
+        const row = Array.isArray(r.body) ? r.body.find(x => x.Comment && x.Comment.ID === state.rtCommentC) : null;
+        const ok = r.status === 200 && row && row.Upvotes === 2 && row.Downvotes === 0 && Math.abs(row.Score - 1.4) < 0.001;
+        return { pass: ok, raw: r };
+      }
+    },
+
+    // ---- Batch 7: AI Comment Summary (DeepSeek) ----
+    // Uses its own fresh activity, not state.actHostID — Batch 6
+    // already approved a comment on that one, which would have
+    // already generated a summary before this batch even starts.
+    {
+      id: "cs_create_activity", batch: 7, title: "Host creates a fresh activity for summary testing — approved immediately",
+      method: "POST", path: "/activities",
+      run: async () => {
+        const r = await call("POST", "/activities", u("HOST").token, {
+          title: "Summary test activity " + RUN_ID,
+          description: "Used to test the AI comment summary feature.",
+        });
+        if (r.status === 201 && r.body) state.summaryActivityID = r.body.ID || r.body.id;
+        return { pass: r.status === 201, raw: r };
+      }
+    },
+    {
+      id: "cs_summary_before_any_comment", batch: 7, title: "Summary is unavailable before any comment exists",
+      method: "GET", path: "/activities/:id/comment/summary",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.summaryActivityID + "/comment/summary", u("A").token, null);
+        return { pass: r.status === 200 && r.body && r.body.available === false, raw: r };
+      }
+    },
+    {
+      id: "cs_c_comment_one", batch: 7, title: "C posts the first comment — starts pending",
+      method: "POST", path: "/activities/:id/comment",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.summaryActivityID + "/comment", u("C").token, {
+          body: "This was such a fun activity, loved the pace and the people.",
+        });
+        if (r.status === 201 && r.body) state.summaryCommentID1 = r.body.ID || r.body.id;
+        return { pass: r.status === 201, raw: r };
+      }
+    },
+    {
+      id: "cs_c_comment_two", batch: 7, title: "C posts a second comment — also starts pending",
+      method: "POST", path: "/activities/:id/comment",
+      run: async () => {
+        const r = await call("POST", "/activities/" + state.summaryActivityID + "/comment", u("C").token, {
+          body: "Only downside was parking was a bit far from the meeting point.",
+        });
+        if (r.status === 201 && r.body) state.summaryCommentID2 = r.body.ID || r.body.id;
+        return { pass: r.status === 201, raw: r };
+      }
+    },
+    {
+      id: "cs_summary_still_unavailable_pending", batch: 7, title: "Summary is still unavailable — both comments are only pending, not approved",
+      method: "GET", path: "/activities/:id/comment/summary",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.summaryActivityID + "/comment/summary", u("A").token, null);
+        return { pass: r.status === 200 && r.body && r.body.available === false, raw: r };
+      }
+    },
+    {
+      id: "cs_approve_comment_one", batch: 7, title: "Moderator approves the first comment — triggers summary regeneration",
+      method: "POST", path: "/moderator/comment/:id/approve",
+      run: async () => {
+        const r = await call("POST", "/moderator/comment/" + state.summaryCommentID1 + "/approve", u("MOD").token, null);
+        return { pass: r.status === 200, raw: r };
+      }
+    },
+    {
+      id: "cs_summary_after_one_approval", batch: 7, title: "DeepSeek summary is generated from the one approved comment (needs DEEPSEEK_API_KEY configured on this server)",
+      method: "GET", path: "/activities/:id/comment/summary",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.summaryActivityID + "/comment/summary", u("A").token, null);
+        const b = r.body || {};
+        const ok = r.status === 200 && b.available === true && b.comment_count === 1 &&
+          typeof b.summary === "string" && b.summary.length > 0 && !!b.generated_at;
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "cs_approve_comment_two", batch: 7, title: "Moderator approves the second comment — regenerates the summary again",
+      method: "POST", path: "/moderator/comment/:id/approve",
+      run: async () => {
+        const r = await call("POST", "/moderator/comment/" + state.summaryCommentID2 + "/approve", u("MOD").token, null);
+        return { pass: r.status === 200, raw: r };
+      }
+    },
+    {
+      id: "cs_summary_after_two_approvals", batch: 7, title: "Summary now reflects both approved comments — comment_count updates to 2",
+      method: "GET", path: "/activities/:id/comment/summary",
+      run: async () => {
+        const r = await call("GET", "/activities/" + state.summaryActivityID + "/comment/summary", u("A").token, null);
+        const b = r.body || {};
+        const ok = r.status === 200 && b.available === true && b.comment_count === 2 &&
+          typeof b.summary === "string" && b.summary.length > 0;
+        return { pass: ok, raw: r };
+      }
+    },
+    {
+      id: "cs_summary_never_commented_activity", batch: 7, title: "A brand-new activity with zero comments ever also reports unavailable",
+      method: "GET", path: "/activities/:id/comment/summary",
+      run: async () => {
+        const created = await call("POST", "/activities", u("MOD").token, {
+          title: "Never commented " + RUN_ID,
+          description: "Should have no summary.",
+        });
+        const newID = created.body ? (created.body.ID || created.body.id) : null;
+        if (!newID) return { pass: false, raw: created };
+        const r = await call("GET", "/activities/" + newID + "/comment/summary", u("A").token, null);
+        return { pass: r.status === 200 && r.body && r.body.available === false, raw: r };
+      }
+    },
+    {
+      id: "cs_summary_bad_activity_id", batch: 7, title: "An invalid activity id in the summary path returns 400",
+      method: "GET", path: "/activities/:id/comment/summary",
+      run: async () => {
+        const r = await call("GET", "/activities/not-a-uuid/comment/summary", u("A").token, null);
+        return { pass: r.status === 400, raw: r };
+      }
+    },
   ];
 
   // ---------- rendering ----------
@@ -1641,12 +2066,16 @@
     const b3 = document.getElementById("batch3Steps");
     const b4 = document.getElementById("batch4Steps");
     const b5 = document.getElementById("batch5Steps");
+    const b6 = document.getElementById("batch6Steps");
+    const b7 = document.getElementById("batch7Steps");
     b0.innerHTML = "";
     b1.innerHTML = "";
     b2.innerHTML = "";
     b3.innerHTML = "";
     b4.innerHTML = "";
     b5.innerHTML = "";
+    b6.innerHTML = "";
+    b7.innerHTML = "";
 
     allSteps.forEach((step, idx) => {
       const row = el(`
@@ -1665,7 +2094,7 @@
         </div>
       `);
       row.querySelector('[data-role="jump"]').addEventListener("click", () => jumpToRequest(step.id));
-      const container = step.batch === 0 ? b0 : step.batch === 1 ? b1 : step.batch === 2 ? b2 : step.batch === 3 ? b3 : step.batch === 4 ? b4 : b5;
+      const container = step.batch === 0 ? b0 : step.batch === 1 ? b1 : step.batch === 2 ? b2 : step.batch === 3 ? b3 : step.batch === 4 ? b4 : step.batch === 5 ? b5 : step.batch === 6 ? b6 : b7;
       container.appendChild(row);
     });
   }
@@ -1716,6 +2145,12 @@
     state.actModID = null;
     state.archiveID = null;
     state.archiveMediaID = null;
+    state.rtHgID = null;
+    state.rtCommentC = null;
+    state.rtCommentB = null;
+    state.summaryActivityID = null;
+    state.summaryCommentID1 = null;
+    state.summaryCommentID2 = null;
     passed = 0; failed = 0;
     currentStepMeta = null;
     clearRequestsPanel();

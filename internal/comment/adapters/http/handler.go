@@ -3,6 +3,7 @@ package http
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/bLorax/khatere-backend/internal/comment/application"
 	"github.com/bLorax/khatere-backend/internal/comment/domain"
@@ -17,6 +18,7 @@ type Handlers struct {
 	listModerationQueue *application.ListCommentModerationQueueUseCase
 	approveComment      *application.ApproveCommentUseCase
 	rejectComment       *application.RejectCommentUseCase
+	getSummary          *application.GetCommentSummaryUseCase
 }
 
 func NewHandlers(
@@ -26,19 +28,23 @@ func NewHandlers(
 	listModerationQueue *application.ListCommentModerationQueueUseCase,
 	approveComment *application.ApproveCommentUseCase,
 	rejectComment *application.RejectCommentUseCase,
+	getSummary *application.GetCommentSummaryUseCase,
 ) *Handlers {
 	return &Handlers{
 		createComment, listComments, voteComment,
 		listModerationQueue, approveComment, rejectComment,
+		getSummary,
 	}
 }
 
 // RegisterRoutes is mounted under the activity group in server.go
 // (r.Group("/:id"), same as the rating handler), so :id is the
-// activity's id. Produces POST/GET /activities/:id/comment.
+// activity's id. Produces POST/GET /activities/:id/comment and
+// GET /activities/:id/comment/summary.
 func (h *Handlers) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/comment", h.CreateComment)
 	r.GET("/comment", h.ListComments)
+	r.GET("/comment/summary", h.GetSummary)
 }
 
 // RegisterVoteRoute is mounted on its own top-level group in
@@ -272,4 +278,44 @@ func (h *Handlers) RejectComment(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, comment)
+}
+
+// commentSummaryResponse is a deliberate, explicit shape rather
+// than returning domain.CommentSummary directly — "available" is
+// what a frontend actually needs to branch on (show the summary vs.
+// show nothing), and it doesn't exist as a field on the domain type.
+type commentSummaryResponse struct {
+	Available    bool       `json:"available"`
+	Summary      string     `json:"summary"`
+	CommentCount int        `json:"comment_count"`
+	GeneratedAt  *time.Time `json:"generated_at,omitempty"`
+}
+
+func (h *Handlers) GetSummary(c *gin.Context) {
+	activityID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid activity id"})
+		return
+	}
+
+	summary, err := h.getSummary.Execute(c.Request.Context(), activityID)
+	if err != nil {
+		if errors.Is(err, domain.ErrSummaryNotFound) {
+			// Not an error condition — every activity starts here,
+			// before its first comment is ever approved. 200 with
+			// available:false lets the frontend show "no summary
+			// yet" instead of treating a normal state as a failure.
+			c.JSON(http.StatusOK, commentSummaryResponse{Available: false})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, commentSummaryResponse{
+		Available:    true,
+		Summary:      summary.Summary,
+		CommentCount: summary.CommentCount,
+		GeneratedAt:  summary.GeneratedAt,
+	})
 }

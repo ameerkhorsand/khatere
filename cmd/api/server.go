@@ -3,13 +3,17 @@ package main
 import (
 	"context"
 	_ "embed"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	deepseek "github.com/bLorax/khatere-backend/internal/comment/adapters/deepseek"
+	gapgpt "github.com/bLorax/khatere-backend/internal/comment/adapters/gapgpt"
 	commentHTTP "github.com/bLorax/khatere-backend/internal/comment/adapters/http"
 	commentPG "github.com/bLorax/khatere-backend/internal/comment/adapters/postgres"
 	commentApp "github.com/bLorax/khatere-backend/internal/comment/application"
+	commentDomain "github.com/bLorax/khatere-backend/internal/comment/domain"
 
 	archivecreator "github.com/bLorax/khatere-backend/internal/hangout/adapters/archive"
 
@@ -201,17 +205,39 @@ func newRouter(d deps) *gin.Engine {
 	// --- Comment domain wiring ---
 	commentRepo := commentPG.NewCommentRepository(d.pool)
 	commentVoteRepo := commentPG.NewCommentVoteRepository(d.pool)
+	commentSummaryRepo := commentPG.NewCommentSummaryRepository(d.pool)
+
+	// AI comment summaries are optional: with no key configured for
+	// either vendor, Disabled is wired in instead of a real client.
+	// This degrades one feature (the summary endpoint returns
+	// available:false, approving a comment logs a warning) rather
+	// than stopping the whole server from starting over a
+	// third-party key nobody set yet. gapGPT takes priority if both
+	// happen to be set, since it's the one currently in active use.
+	var commentSummarizer commentDomain.CommentSummarizer
+	switch {
+	case d.cfg.GapGPTAPIKey != "":
+		commentSummarizer = gapgpt.NewClient(d.cfg.GapGPTAPIKey, d.cfg.GapGPTModel)
+	case d.cfg.DeepSeekAPIKey != "":
+		commentSummarizer = deepseek.NewClient(d.cfg.DeepSeekAPIKey)
+	default:
+		commentSummarizer = deepseek.Disabled{}
+		log.Println("comment: no AI summarizer key set (GAPGPT_API_KEY or DEEPSEEK_API_KEY) — AI comment summaries are disabled")
+	}
 
 	createCommentUC := commentApp.NewCreateCommentUseCase(commentRepo)
 	listCommentsUC := commentApp.NewListCommentsUseCase(commentRepo, commentVoteRepo)
 	voteCommentUC := commentApp.NewVoteCommentUseCase(commentRepo, commentVoteRepo)
 	listCommentModerationUC := commentApp.NewListCommentModerationQueueUseCase(commentRepo)
-	approveCommentUC := commentApp.NewApproveCommentUseCase(commentRepo)
+	regenerateSummaryUC := commentApp.NewRegenerateCommentSummaryUseCase(commentRepo, commentSummaryRepo, commentSummarizer)
+	getSummaryUC := commentApp.NewGetCommentSummaryUseCase(commentSummaryRepo)
+	approveCommentUC := commentApp.NewApproveCommentUseCase(commentRepo, regenerateSummaryUC)
 	rejectCommentUC := commentApp.NewRejectCommentUseCase(commentRepo)
 
 	commentHandlers := commentHTTP.NewHandlers(
 		createCommentUC, listCommentsUC, voteCommentUC,
 		listCommentModerationUC, approveCommentUC, rejectCommentUC,
+		getSummaryUC,
 	)
 
 	// --- Archive domain wiring ---
