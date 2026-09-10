@@ -484,7 +484,7 @@
 
   <section class="batch b9">
     <h2>Batch 9 — Recommendations</h2>
-    <p class="sub">Reads A's ranked suggestion feed. Checks the auth guard, the shape of each score (Total plus all four signals in [0,1]), that the approved host activity from Batch 2 shows up, that the limit param is honored, and that a second call reads the cache instead of recomputing. InterestMatch is expected to be the neutral 0.5 fallback throughout — there's no endpoint yet to tag an activity with an interest.</p>
+    <p class="sub">Reads A's ranked suggestion feed. Checks the auth guard, the shape of each score (Total plus all five signals in [0,1], including SuggestionAcceptance), that the approved host activity from Batch 2 shows up, that InterestMatch is neutral for that still-untagged activity, that a forced refresh reflects the acceptance Batch 6 already recorded, that the limit param is honored, and that a second call reads the cache instead of recomputing.</p>
     <div id="batch9Steps"></div>
   </section>
 
@@ -495,7 +495,7 @@
   </section>
 
   <footer class="note">
-    Each run creates fresh test accounts using a timestamp, so it's safe to run this repeatedly without hitting duplicate email or handle conflicts. Batch 8 uses the approved host activity from Batch 2 and fresh user A, so the QR, badge, attendance verification, and earned-badge assertions are isolated per run. Batch 9 reuses A's interests from Batch 0 and the approved host activity from Batch 2, and its candidate pool grows across every run ever made against this database, since nothing here deletes old activities. Batch 10 reuses the same host activity and catalog, and gives B a first-ever recommendations call so its cache-miss reflects Batch 10's tagging. Click any step to see the exact request path and the raw response body. Click the ↦ button on a step to jump to its request in the right-hand panel.
+    Each run creates fresh test accounts using a timestamp, so it's safe to run this repeatedly without hitting duplicate email or handle conflicts. Batch 8 uses the approved host activity from Batch 2 and fresh user A, so the QR, badge, attendance verification, and earned-badge assertions are isolated per run. Batch 9 reuses A's interests from Batch 0 and the approved host activity from Batch 2, and its candidate pool grows across every run ever made against this database, since nothing here deletes old activities — so its InterestMatch and SuggestionAcceptance checks are scoped to that one activity's suggestion, not to every suggestion in the feed, since earlier runs' Batch 10 tagging and acceptances persist and would otherwise make older activities non-neutral. Batch 10 reuses the same host activity and catalog, and gives B a first-ever recommendations call so its cache-miss reflects Batch 10's tagging. Click any step to see the exact request path and the raw response body. Click the ↦ button on a step to jump to its request in the right-hand panel.
   </footer>
 
 </div>
@@ -2363,11 +2363,21 @@
     },
 
     // ---- Batch 9: Recommendations ----
-    // Reads A's ranked suggestion feed. There's no endpoint yet to
-    // tag an activity with an interest (activity_interests has no
-    // writer), so InterestMatch is the neutral 0.5 fallback for
-    // every suggestion in this batch — that's expected, not a bug,
-    // until Phase 8's activity-tagging UI exists.
+    // Reads A's ranked suggestion feed. The host activity from
+    // Batch 2 isn't tagged with any interest until Batch 10, so its
+    // InterestMatch is checked for the neutral 0.5 fallback — but
+    // only for that one suggestion, not the whole list, since the
+    // candidate pool includes every approved activity ever created
+    // by this console, including ones a previous run's Batch 10
+    // already tagged (those legitimately show a non-neutral
+    // InterestMatch for A, who has used the same catalog[0:2]
+    // interests since Batch 0). Same reasoning applies to
+    // SuggestionAcceptance: Batch 6 already recorded an accepted
+    // hangout for (A, actHostID), so once this batch's first GET
+    // call records that suggestion as shown, a forced refresh
+    // should show a fully non-neutral acceptance rate for that one
+    // activity — again, checked on that activity alone, not the
+    // whole list.
 
     {
       id: "reco_unauthorized", batch: 9, title: "Recommendations require a valid auth token",
@@ -2400,7 +2410,7 @@
       }
     },
     {
-      id: "reco_score_shape", batch: 9, title: "Each suggestion has a Total in [0,1] and all four signals in [0,1]",
+      id: "reco_score_shape", batch: 9, title: "Each suggestion has a Total in [0,1] and all five signals in [0,1]",
       method: "GET", path: "/recommendations",
       run: async () => {
         const list = state.recoSuggestions || [];
@@ -2413,22 +2423,44 @@
           const history = signals.HistoryAffinity !== undefined ? signals.HistoryAffinity : signals.history_affinity;
           const engagement = signals.Engagement !== undefined ? signals.Engagement : signals.engagement;
           const quality = signals.Quality !== undefined ? signals.Quality : signals.quality;
-          return inRange(total) && inRange(interest) && inRange(history) && inRange(engagement) && inRange(quality);
+          const acceptance = signals.SuggestionAcceptance !== undefined ? signals.SuggestionAcceptance : signals.suggestion_acceptance;
+          return inRange(total) && inRange(interest) && inRange(history) && inRange(engagement) && inRange(quality) && inRange(acceptance);
         });
         return { pass: ok, raw: { status: 200, body: state.recoSuggestions } };
       }
     },
     {
-      id: "reco_untagged_neutral_interest", batch: 9, title: "InterestMatch is the neutral 0.5 fallback for every suggestion — no tagging endpoint exists yet",
+      id: "reco_host_activity_neutral_interest", batch: 9, title: "InterestMatch is the neutral 0.5 fallback for the still-untagged host activity",
       method: "GET", path: "/recommendations",
       run: async () => {
-        const list = state.recoSuggestions || [];
-        const ok = list.length > 0 && list.every(s => {
-          const signals = s.Signals !== undefined ? s.Signals : s.signals;
-          const interest = signals.InterestMatch !== undefined ? signals.InterestMatch : signals.interest_match;
-          return interest === 0.5;
+        const match = (state.recoSuggestions || []).find(s => {
+          const activityID = s.ActivityID !== undefined ? s.ActivityID : s.activity_id;
+          return activityID === state.actHostID;
         });
-        return { pass: ok, raw: { status: 200, body: state.recoSuggestions } };
+        const signals = match ? (match.Signals !== undefined ? match.Signals : match.signals) : null;
+        const interest = signals ? (signals.InterestMatch !== undefined ? signals.InterestMatch : signals.interest_match) : null;
+        const ok = !!match && interest === 0.5;
+        return { pass: ok, raw: { status: 200, body: match || state.recoSuggestions } };
+      }
+    },
+    {
+      id: "reco_refresh_reflects_acceptance", batch: 9, title: "Forced refresh shows full SuggestionAcceptance for the host activity — Batch 6's hangout was already recorded as accepted",
+      method: "POST", path: "/recommendations/refresh",
+      run: async () => {
+        const r = await call("POST", "/recommendations/refresh", u("A").token, null);
+        const suggestions = r.body ? r.body.suggestions : null;
+        const match = (suggestions || []).find(s => {
+          const activityID = s.ActivityID !== undefined ? s.ActivityID : s.activity_id;
+          return activityID === state.actHostID;
+        });
+        const signals = match ? (match.Signals !== undefined ? match.Signals : match.signals) : null;
+        const acceptance = signals ? (signals.SuggestionAcceptance !== undefined ? signals.SuggestionAcceptance : signals.suggestion_acceptance) : null;
+        // times_accepted=1 from Batch 6's hangout, times_suggested=1
+        // from reco_get_default's call just above — 1/1 = 1. This
+        // step must run before any further /recommendations GET
+        // call, or times_suggested (and so this ratio) moves.
+        const ok = r.status === 200 && !!match && acceptance === 1;
+        return { pass: ok, raw: r };
       }
     },
     {
@@ -2459,11 +2491,12 @@
     },
 
     // ---- Batch 10: Activity Interests ----
-    // Tags the Batch 2 host activity with interests, then closes the
-    // loop Batch 9 left open: with the tag in place and B's own
-    // interests set to match, B's first-ever /recommendations call
-    // (a guaranteed cache miss, since B's account is fresh this run)
-    // should show a non-neutral InterestMatch for that activity.
+    // Tags the Batch 2 host activity with interests for the first
+    // time this run, then closes the loop Batch 9 left open: with
+    // the tag in place and B's own interests set to match, B's
+    // first-ever /recommendations call (a guaranteed cache miss,
+    // since B's account is fresh this run) should show a non-neutral
+    // InterestMatch for that activity.
 
     {
       id: "interests_forbidden_non_creator", batch: 10, title: "C (neither creator nor moderator) cannot tag the host activity",

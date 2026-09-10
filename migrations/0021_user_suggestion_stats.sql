@@ -14,7 +14,7 @@
 -- reasoning as user_recommendation_cache (migration 0019).
 -- ============================================================
 CREATE TABLE user_suggestion_stats (
-    user_id            UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id            UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     activity_id        UUID NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
     times_suggested    INTEGER NOT NULL DEFAULT 0,
     times_accepted     INTEGER NOT NULL DEFAULT 0,
