@@ -39,4 +39,10 @@ var (
 	ErrUserAlreadyExists = errors.New("user profile already exists")
 	ErrHandleTaken       = errors.New("handle already taken")
 	ErrVersionConflict   = errors.New("user was modified by another request")
+
+	// ErrInvalidProfilePictureType and ErrProfilePictureTooLarge are
+	// returned by UploadProfilePictureUseCase before any upload is
+	// attempted — see ValidContentType and MaxProfilePictureSizeBytes.
+	ErrInvalidProfilePictureType = errors.New("profile picture must be jpg, png, or webp")
+	ErrProfilePictureTooLarge    = errors.New("profile picture exceeds the 10 MB limit")
 )

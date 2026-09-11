@@ -1,8 +1,10 @@
 package http
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/bLorax/khatere-backend/internal/user/application"
 	"github.com/bLorax/khatere-backend/internal/user/domain"
@@ -11,12 +13,14 @@ import (
 )
 
 type Handlers struct {
-	createProfile *application.CreateProfileUseCase
-	getProfile    *application.GetProfileUseCase
-	updateProfile *application.UpdateProfileUseCase
-	setInterests  *application.SetInterestsUseCase
-	listInterests *application.ListInterestsUseCase
-	listCatalog   *application.ListInterestCatalogUseCase
+	createProfile        *application.CreateProfileUseCase
+	getProfile           *application.GetProfileUseCase
+	updateProfile        *application.UpdateProfileUseCase
+	setInterests         *application.SetInterestsUseCase
+	listInterests        *application.ListInterestsUseCase
+	listCatalog          *application.ListInterestCatalogUseCase
+	uploadProfilePicture *application.UploadProfilePictureUseCase
+	storage              domain.ProfileStorage
 }
 
 func NewHandlers(
@@ -26,14 +30,68 @@ func NewHandlers(
 	setInterests *application.SetInterestsUseCase,
 	listInterests *application.ListInterestsUseCase,
 	listCatalog *application.ListInterestCatalogUseCase,
+	uploadProfilePicture *application.UploadProfilePictureUseCase,
+	storage domain.ProfileStorage,
 ) *Handlers {
-	return &Handlers{createProfile, getProfile, updateProfile, setInterests, listInterests, listCatalog}
+	return &Handlers{
+		createProfile:        createProfile,
+		getProfile:           getProfile,
+		updateProfile:        updateProfile,
+		setInterests:         setInterests,
+		listInterests:        listInterests,
+		listCatalog:          listCatalog,
+		uploadProfilePicture: uploadProfilePicture,
+		storage:              storage,
+	}
+}
+
+// profileResponse is what the frontend receives for a user profile.
+// ProfilePictureKey never leaves this service — it is an internal
+// MinIO object key, not something the frontend should see or use.
+// Mirrors archive's mediaResponse / toMediaResponse pattern.
+type profileResponse struct {
+	AccountID   uuid.UUID      `json:"AccountID"`
+	DisplayName string         `json:"DisplayName"`
+	Handle      string         `json:"Handle"`
+	Bio         *string        `json:"Bio"`
+	URL         *string        `json:"URL,omitempty"`
+	Metadata    map[string]any `json:"Metadata"`
+	Version     int            `json:"Version"`
+	CreatedAt   time.Time      `json:"CreatedAt"`
+	UpdatedAt   time.Time      `json:"UpdatedAt"`
+}
+
+// toProfileResponse converts a domain.User into the shape the
+// frontend expects, resolving ProfilePictureKey into a fresh URL.
+// If the user has no picture, URL is left nil.
+func toProfileResponse(ctx context.Context, storage domain.ProfileStorage, u *domain.User) (profileResponse, error) {
+	resp := profileResponse{
+		AccountID:   u.AccountID,
+		DisplayName: u.DisplayName,
+		Handle:      u.Handle,
+		Bio:         u.Bio,
+		Metadata:    u.Metadata,
+		Version:     u.Version,
+		CreatedAt:   u.CreatedAt,
+		UpdatedAt:   u.UpdatedAt,
+	}
+
+	if u.ProfilePictureKey != nil {
+		url, err := storage.PublicURL(ctx, *u.ProfilePictureKey)
+		if err != nil {
+			return profileResponse{}, err
+		}
+		resp.URL = &url
+	}
+
+	return resp, nil
 }
 
 func (h *Handlers) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/profile", h.CreateProfile)
 	r.GET("/profile", h.GetProfile)
 	r.PATCH("/profile", h.UpdateProfile)
+	r.POST("/profile/picture", h.UploadProfilePicture)
 	r.PUT("/interests", h.SetInterests)
 	r.GET("/interests", h.ListInterests)
 	r.GET("/interests/catalog", h.ListInterestCatalog)
@@ -85,7 +143,13 @@ func (h *Handlers) CreateProfile(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, user)
+	resp, err := toProfileResponse(c.Request.Context(), h.storage, user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, resp)
 }
 
 func (h *Handlers) GetProfile(c *gin.Context) {
@@ -105,7 +169,13 @@ func (h *Handlers) GetProfile(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, user)
+	resp, err := toProfileResponse(c.Request.Context(), h.storage, user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
 
 type updateProfileRequest struct {
@@ -142,7 +212,65 @@ func (h *Handlers) UpdateProfile(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, user)
+	resp, err := toProfileResponse(c.Request.Context(), h.storage, user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
+// UploadProfilePicture reads a multipart file (field name "file",
+// same as archive's UploadMedia), stores it, and returns the
+// updated profile with a resolved URL.
+func (h *Handlers) UploadProfilePicture(c *gin.Context) {
+	accountID, err := accountIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing file"})
+		return
+	}
+	file, err := fileHeader.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "could not read file"})
+		return
+	}
+	defer file.Close()
+
+	user, err := h.uploadProfilePicture.Execute(c.Request.Context(), application.UploadProfilePictureInput{
+		AccountID:   accountID,
+		Filename:    fileHeader.Filename,
+		ContentType: fileHeader.Header.Get("Content-Type"),
+		Content:     file,
+		SizeBytes:   fileHeader.Size,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrInvalidProfilePictureType):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "profile picture must be jpg, png, or webp"})
+		case errors.Is(err, domain.ErrProfilePictureTooLarge):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "profile picture exceeds the 10 MB limit"})
+		case errors.Is(err, domain.ErrUserNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "user profile not found"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		}
+		return
+	}
+
+	resp, err := toProfileResponse(c.Request.Context(), h.storage, user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
 
 type setInterestsRequest struct {

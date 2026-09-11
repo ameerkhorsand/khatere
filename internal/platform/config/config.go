@@ -18,7 +18,10 @@ type Config struct {
 	MinIORootUser      string
 	MinIORootPassword  string
 	ArchiveMediaBucket string
-	Port               string
+	// UserProfileBucket holds profile pictures uploaded through
+	// POST /user/profile/picture. See internal/user/adapters/minio.
+	UserProfileBucket string
+	Port              string
 	// DeepSeekAPIKey is optional (envOrDefault, not mustEnv): AI
 	// comment summaries are a nice-to-have riding on top of the
 	// Comment domain, not a feature the whole server should refuse
@@ -57,6 +60,7 @@ func Load() *Config {
 		MinIORootUser:      mustEnv("MINIO_ROOT_USER"),
 		MinIORootPassword:  mustEnv("MINIO_ROOT_PASSWORD"),
 		ArchiveMediaBucket: envOrDefault("ARCHIVE_MEDIA_BUCKET", "archive-media"),
+		UserProfileBucket:  envOrDefault("USER_PROFILE_BUCKET", "user-profile-pictures"),
 		Port:               envOrDefault("PORT", "8080"),
 		DeepSeekAPIKey:     envOrDefault("DEEPSEEK_API_KEY", ""),
 		GapGPTAPIKey:       envOrDefault("GAPGPT_API_KEY", ""),

@@ -83,6 +83,7 @@ import (
 	moderatorApp "github.com/bLorax/khatere-backend/internal/moderator/application"
 
 	userHTTP "github.com/bLorax/khatere-backend/internal/user/adapters/http"
+	userminio "github.com/bLorax/khatere-backend/internal/user/adapters/minio"
 	userPG "github.com/bLorax/khatere-backend/internal/user/adapters/postgres"
 	userApp "github.com/bLorax/khatere-backend/internal/user/application"
 
@@ -136,6 +137,7 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker, *notificationWorker.
 	// --- User domain wiring ---
 	userRepo := userPG.NewUserRepository(d.pool)
 	interestRepo := userPG.NewInterestRepository(d.pool)
+	userStorage := userminio.New(d.minioClient, d.minioPublicClient, d.cfg.UserProfileBucket)
 
 	createProfileUC := userApp.NewCreateProfileUseCase(userRepo)
 	getProfileUC := userApp.NewGetProfileUseCase(userRepo)
@@ -143,8 +145,9 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker, *notificationWorker.
 	setInterestsUC := userApp.NewSetInterestsUseCase(interestRepo)
 	listInterestsUC := userApp.NewListInterestsUseCase(interestRepo)
 	listCatalogUC := userApp.NewListInterestCatalogUseCase(interestRepo)
+	uploadProfilePictureUC := userApp.NewUploadProfilePictureUseCase(userRepo, userStorage)
 
-	userHandlers := userHTTP.NewHandlers(createProfileUC, getProfileUC, updateProfileUC, setInterestsUC, listInterestsUC, listCatalogUC)
+	userHandlers := userHTTP.NewHandlers(createProfileUC, getProfileUC, updateProfileUC, setInterestsUC, listInterestsUC, listCatalogUC, uploadProfilePictureUC, userStorage)
 	userPublicHandlers := userHTTP.NewPublicHandlers(userRepo)
 
 	// --- Circle domain wiring ---
