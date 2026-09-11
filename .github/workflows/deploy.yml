@@ -46,11 +46,10 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           port: 3939
           script: |
-            script: |
-              cd /home/admin/khatere-new/khatere
-              git pull origin main
-              sql-migrate up -env=development
-              docker compose pull api
-              docker compose up -d api
-              sleep 5
-              curl -f http://localhost:8080/health || exit 1
+            cd /home/admin/khatere-new/khatere
+            git pull origin main
+            sql-migrate up -env=development
+            docker compose pull api
+            docker compose up -d api
+            sleep 5
+            curl -f http://localhost:8080/health || exit 1
