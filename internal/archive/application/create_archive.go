@@ -2,22 +2,26 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
 	"github.com/bLorax/khatere-backend/internal/archive/domain"
+	notificationdomain "github.com/bLorax/khatere-backend/internal/notification/domain"
 	"github.com/google/uuid"
 )
 
 type CreateArchiveUseCase struct {
 	archives domain.ArchiveRepository
 	hangouts domain.HangoutGateway
+	notify   NotificationPublisher
 }
 
-func NewCreateArchiveUseCase(archives domain.ArchiveRepository, hangouts domain.HangoutGateway) *CreateArchiveUseCase {
-	return &CreateArchiveUseCase{archives: archives, hangouts: hangouts}
+func NewCreateArchiveUseCase(archives domain.ArchiveRepository, hangouts domain.HangoutGateway, notify NotificationPublisher) *CreateArchiveUseCase {
+	return &CreateArchiveUseCase{archives: archives, hangouts: hangouts, notify: notify}
 }
 
 type CreateArchiveInput struct {
@@ -63,6 +67,23 @@ func (uc *CreateArchiveUseCase) Execute(ctx context.Context, in CreateArchiveInp
 
 	if err := uc.archives.Create(ctx, archive); err != nil {
 		return nil, err
+	}
+
+	metadata, _ := json.Marshal(map[string]string{
+		"hangout_id": hangout.ID.String(),
+		"archive_id": archive.ID.String(),
+	})
+	for _, participantID := range hangout.ParticipantIDs {
+		// System-triggered, same reasoning as badge-earned above —
+		// there's no single human actor for "the hangout ended."
+		if err := uc.notify.Publish(ctx, notificationdomain.Event{
+			Type:        notificationdomain.TypeUploadWindowOpened,
+			RecipientID: participantID,
+			ActorID:     participantID,
+			Metadata:    metadata,
+		}); err != nil {
+			log.Printf("archive: failed to publish upload-window notification for %s: %v", participantID, err)
+		}
 	}
 
 	return archive, nil

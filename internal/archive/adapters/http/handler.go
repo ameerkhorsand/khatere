@@ -185,6 +185,11 @@ func (h *Handlers) GetArchive(c *gin.Context) {
 		ArchiveID:   id,
 		RequesterID: requesterID,
 	})
+	if err != nil {
+		handleUseCaseError(c, err)
+		return
+	}
+
 	mediaResp, err := toMediaResponseList(c.Request.Context(), h.storage, detail.Media)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
@@ -246,6 +251,11 @@ func (h *Handlers) UploadMedia(c *gin.Context) {
 		SizeBytes:       fileHeader.Size,
 		DurationSeconds: duration,
 	})
+	if err != nil {
+		handleUseCaseError(c, err)
+		return
+	}
+
 	resp, err := toMediaResponse(c.Request.Context(), h.storage, *media)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})

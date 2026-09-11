@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -35,6 +36,13 @@ type Config struct {
 	// internal/recommendation/adapters/worker.
 	RecommendationRefreshInterval time.Duration
 	RecommendationStaleAfter      time.Duration
+	// KafkaBrokers/KafkaNotificationsTopic drive the notification
+	// pipeline (Phase 9): a producer publishes one event per
+	// notification-worthy action, and a background consumer worker
+	// persists each one to the notifications table. See
+	// internal/notification.
+	KafkaBrokers            []string
+	KafkaNotificationsTopic string
 }
 
 // Load reads all config values from the environment.
@@ -56,6 +64,8 @@ func Load() *Config {
 
 		RecommendationRefreshInterval: envDurationOrDefault("RECOMMENDATION_REFRESH_INTERVAL", 10*time.Minute),
 		RecommendationStaleAfter:      envDurationOrDefault("RECOMMENDATION_STALE_AFTER", 30*time.Minute),
+		KafkaBrokers:                  strings.Split(envOrDefault("KAFKA_BROKERS", "kafka:9092"), ","),
+		KafkaNotificationsTopic:       envOrDefault("KAFKA_NOTIFICATIONS_TOPIC", "notifications"),
 	}
 }
 

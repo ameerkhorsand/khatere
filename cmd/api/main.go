@@ -65,7 +65,7 @@ func main() {
 	}
 
 	// --- Router ---
-	router, recommendationWorker := newRouter(deps{
+	router, recommendationWorker, notificationConsumerWorker := newRouter(deps{
 		cfg:               cfg,
 		pool:              pool,
 		redisClient:       redisClient,
@@ -82,6 +82,7 @@ func main() {
 	workerCtx, cancelWorker := context.WithCancel(ctx)
 	defer cancelWorker()
 	go recommendationWorker.Start(workerCtx)
+	go notificationConsumerWorker.Start(workerCtx)
 
 	// --- Start server ---
 	log.Printf("starting server on :%s", cfg.Port)

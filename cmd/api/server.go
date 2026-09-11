@@ -13,6 +13,12 @@ import (
 	worker "github.com/bLorax/khatere-backend/internal/recommendation/adapters/worker"
 	recommendationApp "github.com/bLorax/khatere-backend/internal/recommendation/application"
 
+	notificationHTTP "github.com/bLorax/khatere-backend/internal/notification/adapters/http"
+	notificationKafka "github.com/bLorax/khatere-backend/internal/notification/adapters/kafka"
+	notificationPG "github.com/bLorax/khatere-backend/internal/notification/adapters/postgres"
+	notificationWorker "github.com/bLorax/khatere-backend/internal/notification/adapters/worker"
+	notificationApp "github.com/bLorax/khatere-backend/internal/notification/application"
+
 	badgeHTTP "github.com/bLorax/khatere-backend/internal/badge/adapters/http"
 	badgePG "github.com/bLorax/khatere-backend/internal/badge/adapters/postgres"
 	badgeApp "github.com/bLorax/khatere-backend/internal/badge/application"
@@ -106,9 +112,10 @@ type deps struct {
 
 // newRouter wires every bounded context's repositories, use cases, and
 // HTTP handlers, then returns a ready-to-run gin.Engine, plus the
-// recommendation cache-refresh worker (Step 5) so main.go can start
-// and stop it alongside the server.
-func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
+// recommendation cache-refresh worker (Step 5) and the notification
+// consumer worker (Phase 9, Step 8) so main.go can start and stop
+// them alongside the server.
+func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker, *notificationWorker.ConsumerWorker) {
 	// --- Security ---
 	hasher := security.NewBcryptHasher(0)
 	tokens := security.NewJWTTokenService([]byte(d.cfg.JWTSecret), 15*time.Minute)
@@ -194,6 +201,26 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
 	getModeratorProfileUC := moderatorApp.NewGetModeratorProfileUseCase(moderatorRepo)
 	moderatorHandlers := moderatorHTTP.NewHandlers(createModeratorProfileUC, getModeratorProfileUC)
 
+	// --- Notification domain wiring (Phase 9: Kafka-backed pipeline) ---
+	// notificationProducer satisfies every other domain's own narrow
+	// NotificationPublisher port directly (Step 9's design decision:
+	// notification.Event is a shared, thin cross-domain contract, so
+	// no per-domain translation adapter is needed) — passed as-is
+	// into Activity, Comment, UserBadge, Archive, and Hangout below.
+	notificationRepo := notificationPG.NewRepository(d.pool)
+	notificationProducer := notificationKafka.NewProducer(d.cfg.KafkaBrokers, d.cfg.KafkaNotificationsTopic)
+	listNotificationsUC := notificationApp.NewListNotificationsUseCase(notificationRepo)
+	markNotificationReadUC := notificationApp.NewMarkNotificationReadUseCase(notificationRepo)
+	notificationHandlers := notificationHTTP.NewHandlers(listNotificationsUC, markNotificationReadUC)
+
+	// Background consumer worker (Step 8): reads events off the same
+	// Kafka topic notificationProducer publishes to, and persists
+	// each one through notificationRepo. main.go starts this in its
+	// own goroutine, alongside recommendationWorker.
+	notificationConsumerWorker := notificationWorker.NewConsumerWorker(
+		d.cfg.KafkaBrokers, d.cfg.KafkaNotificationsTopic, notificationRepo,
+	)
+
 	// --- Activity domain wiring ---
 	activityRepo := activityPG.NewActivityRepository(d.pool)
 	activityInterestRepo := activityPG.NewActivityInterestRepository(d.pool)
@@ -203,8 +230,8 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
 	listActivitiesUC := activityApp.NewListActivitiesUseCase(activityRepo)
 	listMyActivitiesUC := activityApp.NewListMyActivitiesUseCase(activityRepo)
 	listModerationQueueUC := activityApp.NewListModerationQueueUseCase(activityRepo)
-	approveActivityUC := activityApp.NewApproveActivityUseCase(activityRepo)
-	rejectActivityUC := activityApp.NewRejectActivityUseCase(activityRepo)
+	approveActivityUC := activityApp.NewApproveActivityUseCase(activityRepo, notificationProducer)
+	rejectActivityUC := activityApp.NewRejectActivityUseCase(activityRepo, notificationProducer)
 	setActivityInterestsUC := activityApp.NewSetActivityInterestsUseCase(activityRepo, activityInterestRepo)
 	listActivityInterestsUC := activityApp.NewListActivityInterestsUseCase(activityInterestRepo)
 
@@ -227,7 +254,7 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
 	messageRepo := hangoutPG.NewMessageRepository(d.pool)
 	meetupPinRepo := hangoutPG.NewMeetupPinRepository(d.pool)
 	pinConfirmationRepo := hangoutPG.NewPinConfirmationRepository(d.pool)
-	hangoutNotifier := hangoutNotif.NewLogNotifier()
+	hangoutNotifier := hangoutNotif.NewKafkaNotifier(notificationProducer)
 
 	// --- Rating domain wiring ---
 	// hangoutRepo satisfies ratingApp.AttendanceChecker via its
@@ -259,7 +286,7 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
 	// badge/domain directly — see badge_lookup_repository.go.
 	userBadgeRepo := userbadgePG.NewUserBadgeRepository(d.pool)
 	badgeLookupRepo := userbadgePG.NewBadgeLookupRepository(d.pool)
-	awardBadgeUC := userbadgeApp.NewAwardBadgeUseCase(userBadgeRepo, badgeLookupRepo)
+	awardBadgeUC := userbadgeApp.NewAwardBadgeUseCase(userBadgeRepo, badgeLookupRepo, notificationProducer)
 	listUserBadgesUC := userbadgeApp.NewListUserBadgesUseCase(userBadgeRepo)
 	userBadgeHandlers := userbadgeHTTP.NewHandlers(listUserBadgesUC)
 
@@ -306,8 +333,8 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
 	listCommentModerationUC := commentApp.NewListCommentModerationQueueUseCase(commentRepo)
 	regenerateSummaryUC := commentApp.NewRegenerateCommentSummaryUseCase(commentRepo, commentSummaryRepo, commentSummarizer)
 	getSummaryUC := commentApp.NewGetCommentSummaryUseCase(commentSummaryRepo)
-	approveCommentUC := commentApp.NewApproveCommentUseCase(commentRepo, regenerateSummaryUC)
-	rejectCommentUC := commentApp.NewRejectCommentUseCase(commentRepo)
+	approveCommentUC := commentApp.NewApproveCommentUseCase(commentRepo, regenerateSummaryUC, notificationProducer)
+	rejectCommentUC := commentApp.NewRejectCommentUseCase(commentRepo, notificationProducer)
 
 	commentHandlers := commentHTTP.NewHandlers(
 		createCommentUC, listCommentsUC, voteCommentUC,
@@ -349,7 +376,7 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
 
 	archiveHangoutGateway := archivegateway.New(hangoutRepo, participantRepo, messageRepo)
 	archiveStorage := archiveminio.New(d.minioClient, d.minioPublicClient, d.cfg.ArchiveMediaBucket)
-	createArchiveUC := archiveApp.NewCreateArchiveUseCase(archiveRepo, archiveHangoutGateway)
+	createArchiveUC := archiveApp.NewCreateArchiveUseCase(archiveRepo, archiveHangoutGateway, notificationProducer)
 
 	// Mirror-image gateway: lets Hangout trigger archive creation on
 	// cancel/complete without importing the archive module directly.
@@ -509,6 +536,10 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
 	recommendationGroup.Use(authMW)
 	recommendationHandlers.RegisterRoutes(recommendationGroup)
 
+	notificationGroup := router.Group("/notifications")
+	notificationGroup.Use(authMW)
+	notificationHandlers.RegisterRoutes(notificationGroup)
+
 	archiveGroup := router.Group("/archives")
 	archiveGroup.Use(authMW)
 	archiveHandlers.RegisterRoutes(archiveGroup)
@@ -517,7 +548,7 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
 	// doc comment in internal/archive/adapters/http/handler.go.
 	archiveHandlers.RegisterUploadPromptRoute(hangoutGroup)
 
-	return router, recommendationWorker
+	return router, recommendationWorker, notificationConsumerWorker
 }
 
 // healthCheck pings every downstream dependency and reports the first

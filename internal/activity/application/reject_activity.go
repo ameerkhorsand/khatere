@@ -2,18 +2,22 @@ package application
 
 import (
 	"context"
+	"encoding/json"
+	"log"
 	"time"
 
 	"github.com/bLorax/khatere-backend/internal/activity/domain"
+	notificationdomain "github.com/bLorax/khatere-backend/internal/notification/domain"
 	"github.com/google/uuid"
 )
 
 type RejectActivityUseCase struct {
 	activities domain.ActivityRepository
+	notify     NotificationPublisher
 }
 
-func NewRejectActivityUseCase(activities domain.ActivityRepository) *RejectActivityUseCase {
-	return &RejectActivityUseCase{activities: activities}
+func NewRejectActivityUseCase(activities domain.ActivityRepository, notify NotificationPublisher) *RejectActivityUseCase {
+	return &RejectActivityUseCase{activities: activities, notify: notify}
 }
 
 type RejectActivityInput struct {
@@ -42,5 +46,29 @@ func (uc *RejectActivityUseCase) Execute(ctx context.Context, in RejectActivityI
 		return nil, err
 	}
 
+	metadata, _ := json.Marshal(map[string]string{
+		"activity_id":    activity.ID.String(),
+		"activity_title": activity.Title,
+		"reason":         reasonOrEmpty(activity.RejectionReason),
+	})
+	if err := uc.notify.Publish(ctx, notificationdomain.Event{
+		Type:        notificationdomain.TypeActivityRejected,
+		RecipientID: activity.CreatedBy,
+		ActorID:     in.ModeratorID,
+		Metadata:    metadata,
+	}); err != nil {
+		log.Printf("activity: failed to publish rejection notification for %s: %v", activity.ID, err)
+	}
+
 	return activity, nil
+}
+
+// reasonOrEmpty reads a rejection reason safely. Reason is a
+// *string, so json.Marshal on a nil pointer would put null in the
+// metadata map instead of an empty string.
+func reasonOrEmpty(reason *string) string {
+	if reason == nil {
+		return ""
+	}
+	return *reason
 }

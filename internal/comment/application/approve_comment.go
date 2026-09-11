@@ -2,20 +2,23 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"time"
 
 	"github.com/bLorax/khatere-backend/internal/comment/domain"
+	notificationdomain "github.com/bLorax/khatere-backend/internal/notification/domain"
 	"github.com/google/uuid"
 )
 
 type ApproveCommentUseCase struct {
 	comments   domain.CommentRepository
 	summarizer domain.SummaryRegenerator
+	notify     NotificationPublisher
 }
 
-func NewApproveCommentUseCase(comments domain.CommentRepository, summarizer domain.SummaryRegenerator) *ApproveCommentUseCase {
-	return &ApproveCommentUseCase{comments: comments, summarizer: summarizer}
+func NewApproveCommentUseCase(comments domain.CommentRepository, summarizer domain.SummaryRegenerator, notify NotificationPublisher) *ApproveCommentUseCase {
+	return &ApproveCommentUseCase{comments: comments, summarizer: summarizer, notify: notify}
 }
 
 type ApproveCommentInput struct {
@@ -50,6 +53,19 @@ func (uc *ApproveCommentUseCase) Execute(ctx context.Context, in ApproveCommentI
 	// look like it failed.
 	if err := uc.summarizer.Execute(ctx, comment.ActivityID); err != nil {
 		log.Printf("comment: failed to regenerate summary for activity %s: %v", comment.ActivityID, err)
+	}
+
+	metadata, _ := json.Marshal(map[string]string{
+		"comment_id":  comment.ID.String(),
+		"activity_id": comment.ActivityID.String(),
+	})
+	if err := uc.notify.Publish(ctx, notificationdomain.Event{
+		Type:        notificationdomain.TypeCommentApproved,
+		RecipientID: comment.UserID,
+		ActorID:     in.ModeratorID,
+		Metadata:    metadata,
+	}); err != nil {
+		log.Printf("comment: failed to publish approval notification for %s: %v", comment.ID, err)
 	}
 
 	return comment, nil

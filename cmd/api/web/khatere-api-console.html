@@ -594,6 +594,12 @@
     <div id="batch10Steps"></div>
   </section>
 
+  <section class="batch b11">
+    <h2>Batch 11 — Notifications</h2>
+    <p class="sub">Doesn't trigger new actions — every one of the 12 notification types was already triggered as a side effect of Batches 2 through 8 (invite, accept, cancel, pin propose/change/confirm, hangout completion, activity approve/reject, comment approve/reject, badge earned). This batch confirms each one landed as a real row, for the right recipient, by reading it back from GET /notifications — polling briefly, since Kafka delivery is asynchronous — then checks POST /notifications/:id/read marks one row read without touching anyone else's.</p>
+    <div id="batch11Steps"></div>
+  </section>
+
   <section class="batch manual" id="wsPanel">
     <h2>Manual — Chat WebSocket</h2>
     <p class="sub">Not part of "Run all" — this opens two real, independent WebSockets to <code>/hangouts/:id/chat</code>, both inside this one page, so there's no need to copy a token between browser tabs. Connect both to the same hangout as two different users, then send from one and watch it land in the other's log.</p>
@@ -690,7 +696,7 @@
 (function () {
   "use strict";
 
-  const RUN_ID = Date.now();
+  let RUN_ID = Date.now();
   const state = {
     baseUrl: "",
     users: {},   // key -> { email, password, token, refreshToken, accountId, handle }
@@ -709,6 +715,8 @@
     rtCommentB: null,      // Batch 6 — B's comment, gets rejected
     recoSuggestions: null, // Batch 9 — A's suggestion list from the first (cache-miss) call
     recoSuggestionsB: null, // Batch 10 — B's suggestion list from B's first-ever (cache-miss) call
+    notifInviteID: null,        // Batch 11 — B's hangout_invite notification, used for the mark-read check
+    notifUploadWindowID: null,  // Batch 11 — A's upload_window_opened notification
   };
 
   let passed = 0, failed = 0;
@@ -837,6 +845,24 @@
 
   function setUser(key, patch) {
     state.users[key] = Object.assign(state.users[key] || {}, patch);
+  }
+
+  // Notifications are delivered asynchronously (publish to Kafka,
+  // then a separate consumer worker persists the row), so a check
+  // run immediately after the triggering action can race the
+  // consumer. This polls GET /notifications a few times with a
+  // short delay, instead of asserting on a single snapshot.
+  async function findNotification(userKey, type, matchFn, tries = 12, delayMs = 300) {
+    let last = null;
+    for (let i = 0; i < tries; i++) {
+      const r = await call("GET", "/notifications?limit=50", u(userKey).token, null);
+      last = r;
+      const list = (r.body && r.body.notifications) || [];
+      const found = list.find(n => n.Type === type && (!matchFn || matchFn(n)));
+      if (found) return { found, list, raw: r };
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+    return { found: null, list: (last && last.body && last.body.notifications) || [], raw: last };
   }
 
   // ---------- step definitions ----------
@@ -996,6 +1022,10 @@
       method: "POST", path: "/moderator/profile",
       run: async () => {
         const r = await call("POST", "/moderator/profile", u("MOD").token, {});
+        if (r.status === 201 && r.body) {
+          const accountId = r.body.AccountID || r.body.account_id;
+          if (accountId) setUser("MOD", { accountId });
+        }
         return { pass: r.status === 201, raw: r };
       }
     },
@@ -2634,6 +2664,14 @@
         // step must run before any further /recommendations GET
         // call, or times_suggested (and so this ratio) moves.
         const ok = r.status === 200 && !!match && acceptance === 1;
+        // This refresh is a deliberate re-ranking, not a no-op —
+        // it just proved SuggestionAcceptance moved to 1, which can
+        // change the top suggestion. The old state.recoSuggestions
+        // snapshot (from before this refresh) is stale as a
+        // baseline for any later cache-consistency check, so save
+        // a fresh one here instead of leaving that check to compare
+        // against pre-refresh data.
+        if (Array.isArray(suggestions)) state.recoSuggestions = suggestions;
         return { pass: ok, raw: r };
       }
     },
@@ -2749,6 +2787,139 @@
         return { pass: ok, raw: r };
       }
     },
+
+    // ---- Batch 11: Notifications ----
+    // No new actions here — every one of the 12 notification types was
+    // already triggered as a side effect of Batches 2 through 8. Each
+    // check polls GET /notifications for the recipient (Kafka delivery
+    // is asynchronous, so a single snapshot could race the consumer),
+    // then the last step confirms POST /notifications/:id/read only
+    // touches the one row it targets.
+    {
+      id: "notif_hangout_invite", batch: 11, title: "B received a hangout_invite notification for Batch 3's hangout",
+      method: "GET", path: "/notifications",
+      run: async () => {
+        const { found, raw } = await findNotification("B", "hangout_invite", n => n.Metadata && n.Metadata.hangout_id === state.hgID);
+        if (found) state.notifInviteID = found.ID;
+        const ok = !!found && found.RecipientID === u("B").accountId && found.ActorID === u("A").accountId;
+        return { pass: ok, raw };
+      }
+    },
+    {
+      id: "notif_invite_responded", batch: 11, title: "A received a hangout_invite_responded notification once B accepted",
+      method: "GET", path: "/notifications",
+      run: async () => {
+        const { found, raw } = await findNotification("A", "hangout_invite_responded", n => n.Metadata && n.Metadata.hangout_id === state.hgID);
+        const ok = !!found && found.RecipientID === u("A").accountId && found.ActorID === u("B").accountId;
+        return { pass: ok, raw };
+      }
+    },
+    {
+      id: "notif_hangout_cancelled", batch: 11, title: "B received a hangout_cancelled notification once A cancelled",
+      method: "GET", path: "/notifications",
+      run: async () => {
+        const { found, raw } = await findNotification("B", "hangout_cancelled", n => n.Metadata && n.Metadata.hangout_id === state.hgID);
+        const ok = !!found && found.RecipientID === u("B").accountId && found.ActorID === u("A").accountId;
+        return { pass: ok, raw };
+      }
+    },
+    {
+      id: "notif_pin_proposed", batch: 11, title: "B received a meetup_pin_proposed notification for A's first pin",
+      method: "GET", path: "/notifications",
+      run: async () => {
+        const { found, raw } = await findNotification("B", "meetup_pin_proposed", n => n.Metadata && n.Metadata.hangout_id === state.mpHangoutID);
+        const ok = !!found && found.RecipientID === u("B").accountId && found.ActorID === u("A").accountId;
+        return { pass: ok, raw };
+      }
+    },
+    {
+      id: "notif_pin_confirmed", batch: 11, title: "A received a meetup_pin_confirmed notification once B confirmed",
+      method: "GET", path: "/notifications",
+      run: async () => {
+        const { found, raw } = await findNotification("A", "meetup_pin_confirmed", n => n.Metadata && n.Metadata.hangout_id === state.mpHangoutID);
+        const ok = !!found && found.RecipientID === u("A").accountId && found.ActorID === u("B").accountId;
+        return { pass: ok, raw };
+      }
+    },
+    {
+      id: "notif_pin_changed", batch: 11, title: "B received a meetup_pin_changed notification once A changed the pin",
+      method: "GET", path: "/notifications",
+      run: async () => {
+        const { found, raw } = await findNotification("B", "meetup_pin_changed", n => n.Metadata && n.Metadata.hangout_id === state.mpHangoutID);
+        const ok = !!found && found.RecipientID === u("B").accountId && found.ActorID === u("A").accountId;
+        return { pass: ok, raw };
+      }
+    },
+    {
+      id: "notif_upload_window_opened", batch: 11, title: "A received an upload_window_opened notification for the Batch 5 archive",
+      method: "GET", path: "/notifications",
+      run: async () => {
+        const { found, raw } = await findNotification("A", "upload_window_opened", n => n.Metadata && n.Metadata.hangout_id === state.hgID);
+        if (found) state.notifUploadWindowID = found.ID;
+        const ok = !!found && found.RecipientID === u("A").accountId && found.ActorID === u("A").accountId;
+        return { pass: ok, raw };
+      }
+    },
+    {
+      id: "notif_activity_approved", batch: 11, title: "A received an activity_approved notification once MOD approved A's activity",
+      method: "GET", path: "/notifications",
+      run: async () => {
+        const { found, raw } = await findNotification("A", "activity_approved", n => n.Metadata && n.Metadata.activity_id === state.actUserPendingID);
+        const ok = !!found && found.RecipientID === u("A").accountId && found.ActorID === u("MOD").accountId;
+        return { pass: ok, raw };
+      }
+    },
+    {
+      id: "notif_activity_rejected", batch: 11, title: "B received an activity_rejected notification once MOD rejected B's activity",
+      method: "GET", path: "/notifications",
+      run: async () => {
+        const { found, raw } = await findNotification("B", "activity_rejected", n => n.Metadata && n.Metadata.activity_id === state.actUserPendingID2);
+        const ok = !!found && found.RecipientID === u("B").accountId && found.ActorID === u("MOD").accountId;
+        return { pass: ok, raw };
+      }
+    },
+    {
+      id: "notif_comment_approved", batch: 11, title: "C received a comment_approved notification once MOD approved C's comment",
+      method: "GET", path: "/notifications",
+      run: async () => {
+        const { found, raw } = await findNotification("C", "comment_approved", n => n.Metadata && n.Metadata.comment_id === state.rtCommentC);
+        const ok = !!found && found.RecipientID === u("C").accountId && found.ActorID === u("MOD").accountId;
+        return { pass: ok, raw };
+      }
+    },
+    {
+      id: "notif_comment_rejected", batch: 11, title: "B received a comment_rejected notification once MOD rejected B's comment",
+      method: "GET", path: "/notifications",
+      run: async () => {
+        const { found, raw } = await findNotification("B", "comment_rejected", n => n.Metadata && n.Metadata.comment_id === state.rtCommentB);
+        const ok = !!found && found.RecipientID === u("B").accountId && found.ActorID === u("MOD").accountId;
+        return { pass: ok, raw };
+      }
+    },
+    {
+      id: "notif_badge_earned", batch: 11, title: "A received a badge_earned notification once the QR scan awarded the badge",
+      method: "GET", path: "/notifications",
+      run: async () => {
+        const { found, raw } = await findNotification("A", "badge_earned", n => n.Metadata && n.Metadata.badge_id === state.badgeID);
+        const ok = !!found && found.RecipientID === u("A").accountId && found.ActorID === u("A").accountId;
+        return { pass: ok, raw };
+      }
+    },
+    {
+      id: "notif_mark_read", batch: 11, title: "B marks the hangout_invite notification read — it's read, everything else of B's stays unread",
+      method: "POST", path: "/notifications/:id/read",
+      run: async () => {
+        if (!state.notifInviteID) return { pass: false, raw: null };
+        const markRes = await call("POST", "/notifications/" + state.notifInviteID + "/read", u("B").token, null);
+        const listRes = await call("GET", "/notifications?limit=50", u("B").token, null);
+        const list = (listRes.body && listRes.body.notifications) || [];
+        const target = list.find(n => n.ID === state.notifInviteID);
+        const others = list.filter(n => n.ID !== state.notifInviteID);
+        const ok = markRes.status === 200 && !!target && !!target.ReadAt &&
+          others.every(n => !n.ReadAt);
+        return { pass: ok, raw: listRes };
+      }
+    },
   ];
 
   // ---------- rendering ----------
@@ -2765,6 +2936,7 @@
     const b8 = document.getElementById("batch8Steps");
     const b9 = document.getElementById("batch9Steps");
     const b10 = document.getElementById("batch10Steps");
+    const b11 = document.getElementById("batch11Steps");
     b0.innerHTML = "";
     b1.innerHTML = "";
     b2.innerHTML = "";
@@ -2776,6 +2948,7 @@
     b8.innerHTML = "";
     b9.innerHTML = "";
     b10.innerHTML = "";
+    b11.innerHTML = "";
 
     allSteps.forEach((step, idx) => {
       const row = el(`
@@ -2794,7 +2967,7 @@
         </div>
       `);
       row.querySelector('[data-role="jump"]').addEventListener("click", () => jumpToRequest(step.id));
-      const container = step.batch === 0 ? b0 : step.batch === 1 ? b1 : step.batch === 2 ? b2 : step.batch === 3 ? b3 : step.batch === 4 ? b4 : step.batch === 5 ? b5 : step.batch === 6 ? b6 : step.batch === 7 ? b7 : step.batch === 8 ? b8 : step.batch === 9 ? b9 : b10;
+      const container = step.batch === 0 ? b0 : step.batch === 1 ? b1 : step.batch === 2 ? b2 : step.batch === 3 ? b3 : step.batch === 4 ? b4 : step.batch === 5 ? b5 : step.batch === 6 ? b6 : step.batch === 7 ? b7 : step.batch === 8 ? b8 : step.batch === 9 ? b9 : step.batch === 10 ? b10 : b11;
       container.appendChild(row);
     });
   }
@@ -2812,6 +2985,14 @@
 
   async function runAll() {
     state.baseUrl = document.getElementById("baseUrl").value.replace(/\/$/, "");
+    // RUN_ID must change on every run, not only on page reload, or a
+    // second click of "Run all" re-sends the same emails/handles as
+    // the first click, hits 409 conflicts on the early register/
+    // profile/interest steps, and silently skips setting state.*
+    // fields those steps normally set — which then cascades into
+    // unrelated-looking failures far later in the run (any step that
+    // reads a state.* field set by an earlier step).
+    RUN_ID = Date.now();
     passed = 0; failed = 0;
     document.getElementById("runAllBtn").disabled = true;
 

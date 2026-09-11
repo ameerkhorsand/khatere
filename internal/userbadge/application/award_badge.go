@@ -2,9 +2,12 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"log"
 	"time"
 
+	notificationdomain "github.com/bLorax/khatere-backend/internal/notification/domain"
 	"github.com/bLorax/khatere-backend/internal/userbadge/domain"
 	"github.com/google/uuid"
 )
@@ -26,10 +29,11 @@ type BadgeLookup interface {
 type AwardBadgeUseCase struct {
 	userBadges domain.UserBadgeRepository
 	badges     BadgeLookup
+	notify     NotificationPublisher
 }
 
-func NewAwardBadgeUseCase(userBadges domain.UserBadgeRepository, badges BadgeLookup) *AwardBadgeUseCase {
-	return &AwardBadgeUseCase{userBadges: userBadges, badges: badges}
+func NewAwardBadgeUseCase(userBadges domain.UserBadgeRepository, badges BadgeLookup, notify NotificationPublisher) *AwardBadgeUseCase {
+	return &AwardBadgeUseCase{userBadges: userBadges, badges: badges, notify: notify}
 }
 
 // AwardIfBadgeExists gives userID the badge set up for activityID,
@@ -62,5 +66,27 @@ func (uc *AwardBadgeUseCase) AwardIfBadgeExists(ctx context.Context, userID, act
 		Visible:         true,
 		AwardedAt:       time.Now(),
 	}
-	return uc.userBadges.Create(ctx, award)
+	if err := uc.userBadges.Create(ctx, award); err != nil {
+		return err
+	}
+
+	metadata, _ := json.Marshal(map[string]string{
+		"badge_id": badgeID.String(),
+		"name":     name,
+		"icon_key": iconKey,
+	})
+	if err := uc.notify.Publish(ctx, notificationdomain.Event{
+		Type: notificationdomain.TypeBadgeEarned,
+		// No human actor caused this — awarding is a system action
+		// triggered by a QR scan, not a person doing something to
+		// another person. Using the recipient as their own actor
+		// avoids a nullable actor column for this one case.
+		RecipientID: userID,
+		ActorID:     userID,
+		Metadata:    metadata,
+	}); err != nil {
+		log.Printf("userbadge: failed to publish badge-earned notification for %s: %v", award.ID, err)
+	}
+
+	return nil
 }
