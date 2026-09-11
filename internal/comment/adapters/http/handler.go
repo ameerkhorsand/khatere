@@ -39,11 +39,20 @@ func NewHandlers(
 
 // RegisterRoutes is mounted under the activity group in server.go
 // (r.Group("/:id"), same as the rating handler), so :id is the
-// activity's id. Produces POST/GET /activities/:id/comment and
-// GET /activities/:id/comment/summary.
+// activity's id. Produces POST/GET /activities/:id/comment.
+// The summary route is registered separately — see RegisterSummaryRoute.
 func (h *Handlers) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/comment", h.CreateComment)
 	r.GET("/comment", h.ListComments)
+}
+
+// RegisterSummaryRoute is kept separate from RegisterRoutes so
+// server.go can apply a stricter rate limit to this route only —
+// GetSummary calls an external AI provider (GapGPT/DeepSeek), which
+// costs money per call, unlike the plain comment routes above.
+// Mounted on the same group as RegisterRoutes. Produces
+// GET /activities/:id/comment/summary.
+func (h *Handlers) RegisterSummaryRoute(r *gin.RouterGroup) {
 	r.GET("/comment/summary", h.GetSummary)
 }
 

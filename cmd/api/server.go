@@ -472,41 +472,49 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker, *notificationWorker.
 		healthCheck(reqCtx, c, d)
 	})
 
+	// Rate limit key funcs and the general per-user limit are built once,
+	// then reused across every authenticated group below — same pattern
+	// as authMW just below.
+	generalLimit := middleware.RateLimit(d.redisClient, middleware.KeyByAccountID("general"), 60, time.Minute)
+
 	authGroup := router.Group("/auth")
+	authGroup.Use(middleware.RateLimit(d.redisClient, middleware.KeyByIP("auth"), 5, time.Minute))
 	authHandlers.RegisterRoutes(authGroup)
 
 	authMW := middleware.AuthRequired(d.cfg.JWTSecret)
 
 	userGroup := router.Group("/user")
-	userGroup.Use(authMW)
+	userGroup.Use(authMW, generalLimit)
 	userHandlers.RegisterRoutes(userGroup)
 
 	// Public, read-only lookups (e.g. resolving a UUID to a name for
 	// Circle/Hangout screens). Separate from /user on purpose — this
 	// group returns other people's data, not the caller's own.
 	usersGroup := router.Group("/users")
-	usersGroup.Use(authMW)
+	usersGroup.Use(authMW, generalLimit)
 	userPublicHandlers.RegisterRoutes(usersGroup)
 	userBadgeHandlers.RegisterRoutes(userGroup)
 
 	hostGroup := router.Group("/host")
-	hostGroup.Use(authMW)
+	hostGroup.Use(authMW, generalLimit)
 	hostHandlers.RegisterRoutes(hostGroup)
 
 	moderatorGroup := router.Group("/moderator")
-	moderatorGroup.Use(authMW)
+	moderatorGroup.Use(authMW, generalLimit)
 	moderatorHandlers.RegisterRoutes(moderatorGroup)
 
 	circleGroup := router.Group("/circle")
-	circleGroup.Use(authMW)
+	circleGroup.Use(authMW, generalLimit)
 	circleHandlers.RegisterRoutes(circleGroup)
 
 	activityGroup := router.Group("/activities")
-	activityGroup.Use(authMW)
+	activityGroup.Use(authMW, generalLimit)
 	activityHandlers.RegisterRoutes(activityGroup)
 
 	// Rating routes nest under /activities/:id — RegisterRoutes reads
-	// :id from this parent group, same as GetActivity does.
+	// :id from this parent group, same as GetActivity does. Already
+	// covered by activityGroup's generalLimit above, since Gin
+	// middleware on a parent group also runs for its subgroups.
 	ratingGroup := activityGroup.Group("/:id")
 	ratingHandlers.RegisterRoutes(ratingGroup)
 
@@ -515,33 +523,44 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker, *notificationWorker.
 
 	commentHandlers.RegisterRoutes(ratingGroup) // reuse activityGroup.Group("/:id")
 
+	// The summary route calls an external AI provider per request, so
+	// it gets its own, much stricter limit, on top of generalLimit
+	// above — see the note on RegisterSummaryRoute.
+	summaryGroup := ratingGroup.Group("/")
+	summaryGroup.Use(middleware.RateLimit(d.redisClient, middleware.KeyByAccountID("ai-summary"), 10, time.Minute))
+	commentHandlers.RegisterSummaryRoute(summaryGroup)
+
 	commentVoteGroup := router.Group("/comment")
-	commentVoteGroup.Use(authMW)
+	commentVoteGroup.Use(authMW, generalLimit)
 	commentHandlers.RegisterVoteRoute(commentVoteGroup)
 
 	commentHandlers.RegisterModerationRoutes(moderatorGroup)
 
 	hangoutGroup := router.Group("/hangouts")
-	hangoutGroup.Use(authMW)
+	hangoutGroup.Use(authMW, generalLimit)
 	hangoutHandlers.RegisterRoutes(hangoutGroup)
 	hangoutChatGroup := router.Group("/hangouts")
 	hangoutChatGroup.Use(middleware.AuthRequiredQuery(d.cfg.JWTSecret))
+	// Chat messages are frequent and cheap, so this window is much
+	// shorter and tighter than generalLimit — roughly "1 message per
+	// second", with a small burst allowance built into the count.
+	hangoutChatGroup.Use(middleware.RateLimit(d.redisClient, middleware.KeyByAccountID("chat"), 20, 10*time.Second))
 	hangoutHandlers.RegisterChatSocketRoute(hangoutChatGroup)
 
 	attendanceGroup := router.Group("/attendance")
-	attendanceGroup.Use(authMW)
+	attendanceGroup.Use(authMW, generalLimit)
 	attendanceHandlers.RegisterRoutes(attendanceGroup)
 
 	recommendationGroup := router.Group("/recommendations")
-	recommendationGroup.Use(authMW)
+	recommendationGroup.Use(authMW, generalLimit)
 	recommendationHandlers.RegisterRoutes(recommendationGroup)
 
 	notificationGroup := router.Group("/notifications")
-	notificationGroup.Use(authMW)
+	notificationGroup.Use(authMW, generalLimit)
 	notificationHandlers.RegisterRoutes(notificationGroup)
 
 	archiveGroup := router.Group("/archives")
-	archiveGroup.Use(authMW)
+	archiveGroup.Use(authMW, generalLimit)
 	archiveHandlers.RegisterRoutes(archiveGroup)
 
 	// Lives on the hangout group intentionally — see RegisterUploadPromptRoute's
