@@ -1,0 +1,37 @@
+services:
+  postgres:
+    ports: !override
+      - "127.0.0.1:5432:5432"
+
+  redis:
+    ports: !override []
+
+  minio:
+    environment:
+      MINIO_SERVER_URL: https://media.duster.ir
+    ports: !override
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+
+  api:
+    image: ghcr.io/ameerkhorsand/khatere-api:latest
+    ports: !override
+      - "127.0.0.1:8080:8080"
+
+  khaterefront:
+    image: thisishafezdocker/khaterefront:v3
+    container_name: khaterefront
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3008:80"
+
+  swagger:
+    image: docker.swagger.io/swaggerapi/swagger-ui
+    container_name: khatere-swagger
+    restart: unless-stopped
+    environment:
+      SWAGGER_JSON: /openapi.yaml
+    ports:
+      - "127.0.0.1:8095:8080"
+    volumes:
+      - /home/admin/khatere-new/openapi.yaml:/openapi.yaml:ro
