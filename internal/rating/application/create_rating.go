@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/bLorax/khatere-backend/internal/rating/domain"
@@ -22,10 +23,11 @@ type AttendanceChecker interface {
 type CreateRatingUseCase struct {
 	ratings    domain.RatingRepository
 	attendance AttendanceChecker
+	cache      SummaryCache
 }
 
-func NewCreateRatingUseCase(ratings domain.RatingRepository, attendance AttendanceChecker) *CreateRatingUseCase {
-	return &CreateRatingUseCase{ratings: ratings, attendance: attendance}
+func NewCreateRatingUseCase(ratings domain.RatingRepository, attendance AttendanceChecker, cache SummaryCache) *CreateRatingUseCase {
+	return &CreateRatingUseCase{ratings: ratings, attendance: attendance, cache: cache}
 }
 
 type CreateRatingInput struct {
@@ -72,6 +74,14 @@ func (uc *CreateRatingUseCase) Execute(ctx context.Context, in CreateRatingInput
 
 	if err := uc.ratings.Upsert(ctx, rating); err != nil {
 		return nil, err
+	}
+
+	// Best-effort, same reasoning as the notification publish
+	// calls elsewhere: the rating is already saved, so a cache
+	// invalidation failure must not fail the request. The TTL on
+	// the cache entry is what saves us if this genuinely never runs.
+	if err := uc.cache.Invalidate(ctx, in.ActivityID); err != nil {
+		log.Printf("rating: cache invalidation failed for %s: %v", in.ActivityID, err)
 	}
 
 	return rating, nil

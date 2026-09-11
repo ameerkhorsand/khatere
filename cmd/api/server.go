@@ -52,6 +52,7 @@ import (
 
 	ratingHTTP "github.com/bLorax/khatere-backend/internal/rating/adapters/http"
 	ratingPG "github.com/bLorax/khatere-backend/internal/rating/adapters/postgres"
+	ratingRedis "github.com/bLorax/khatere-backend/internal/rating/adapters/redis"
 	ratingApp "github.com/bLorax/khatere-backend/internal/rating/application"
 
 	hangoutWS "github.com/bLorax/khatere-backend/internal/hangout/adapters/websocket"
@@ -260,8 +261,9 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker, *notificationWorker.
 	// hangoutRepo satisfies ratingApp.AttendanceChecker via its
 	// Attended method — see internal/rating/application/create_rating.go.
 	ratingRepo := ratingPG.NewRatingRepository(d.pool)
-	createRatingUC := ratingApp.NewCreateRatingUseCase(ratingRepo, hangoutRepo)
-	getRatingSummaryUC := ratingApp.NewGetRatingSummaryUseCase(ratingRepo)
+	ratingSummaryCache := ratingRedis.NewSummaryCache(d.redisClient)
+	createRatingUC := ratingApp.NewCreateRatingUseCase(ratingRepo, hangoutRepo, ratingSummaryCache)
+	getRatingSummaryUC := ratingApp.NewGetRatingSummaryUseCase(ratingRepo, ratingSummaryCache)
 	ratingHandlers := ratingHTTP.NewHandlers(createRatingUC, getRatingSummaryUC)
 
 	// --- QRCode domain wiring ---
