@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 
+	"github.com/bLorax/khatere-backend/internal/recommendation/domain"
 	"github.com/google/uuid"
 )
 
@@ -39,4 +40,14 @@ type EngagementSource interface {
 // Returns a value in [0, 1].
 type QualitySource interface {
 	Quality(ctx context.Context, activityID uuid.UUID) (float64, error)
+}
+
+// ActivityLookup resolves the display data for a batch of activity
+// IDs in one call, so the /recommendations response can embed each
+// suggestion's activity without a separate request per suggestion.
+// Only approved, non-deleted activities are expected back — an ID
+// with no match (deleted or rejected since it was cached) is simply
+// left out of the returned map, not an error.
+type ActivityLookup interface {
+	ActivitySummaries(ctx context.Context, activityIDs []uuid.UUID) (map[uuid.UUID]domain.ActivitySummary, error)
 }

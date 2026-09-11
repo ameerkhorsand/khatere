@@ -26,19 +26,19 @@ const (
 type Signals struct {
 	// InterestMatch is how well an activity matches the user's
 	// stated/inferred interests (interest lookup table overlap).
-	InterestMatch float64
+	InterestMatch float64 `json:"interest_match"`
 
 	// HistoryAffinity is how often the user has engaged with this
 	// activity or similar ones before (acceptance/attendance rate).
-	HistoryAffinity float64
+	HistoryAffinity float64 `json:"history_affinity"`
 
 	// Engagement is the user's general in-app activity level
 	// (circle size, hangouts organized/joined, recency of use).
-	Engagement float64
+	Engagement float64 `json:"engagement"`
 
 	// Quality is the activity's own reputation: rating average and
 	// comment-vote quality, both already 0..1 normalized.
-	Quality float64
+	Quality float64 `json:"quality"`
 
 	// SuggestionAcceptance is how often this exact activity, once
 	// shown to this user as a suggestion, actually turned into a
@@ -48,7 +48,7 @@ type Signals struct {
 	// SuggestionAcceptance looks at whether being suggested this
 	// activity leads to action at all, reinforcing recurring
 	// interests (e.g. hiking) over time.
-	SuggestionAcceptance float64
+	SuggestionAcceptance float64 `json:"suggestion_acceptance"`
 }
 
 // Weighted combines the five signals into a single score in [0, 1]
@@ -65,11 +65,11 @@ func (s Signals) Weighted() float64 {
 // unit stored in the recommendation cache and returned by the
 // /recommendations endpoint.
 type Score struct {
-	UserID      uuid.UUID
-	ActivityID  uuid.UUID
-	Signals     Signals
-	Total       float64
-	GeneratedAt time.Time
+	UserID      uuid.UUID `json:"user_id"`
+	ActivityID  uuid.UUID `json:"activity_id"`
+	Signals     Signals   `json:"signals"`
+	Total       float64   `json:"total"`
+	GeneratedAt time.Time `json:"generated_at"`
 }
 
 // NewScore builds a Score from raw signals, computing Total via
@@ -82,4 +82,27 @@ func NewScore(userID, activityID uuid.UUID, signals Signals) Score {
 		Total:       signals.Weighted(),
 		GeneratedAt: time.Now().UTC(),
 	}
+}
+
+// ActivitySummary is this domain's own narrow view of an activity —
+// just enough to render a suggestion card. It is not the full
+// Activity type from the activity domain; keeping a separate,
+// smaller type here avoids importing that domain directly, the
+// same way the other signal sources in application/ports.go avoid
+// it.
+type ActivitySummary struct {
+	ID          uuid.UUID `json:"id"`
+	Title       string    `json:"title"`
+	Description *string   `json:"description"`
+	SourceType  string    `json:"source_type"`
+}
+
+// Suggestion is a Score plus the activity data needed to render it,
+// without a second request. It exists only for the API response —
+// the cache still stores plain Score rows, never this type, since
+// an activity's title or description can change after a score was
+// computed and cached.
+type Suggestion struct {
+	Score
+	Activity ActivitySummary `json:"activity"`
 }

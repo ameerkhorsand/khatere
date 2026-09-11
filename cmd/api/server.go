@@ -323,11 +323,12 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
 	engagementSource := recommendationPG.NewEngagementSource(d.pool)
 	qualitySource := recommendationPG.NewQualitySource(d.pool)
 	suggestionStatsRepo := recommendationPG.NewSuggestionStatsRepository(d.pool)
+	activityLookup := recommendationPG.NewActivityLookup(d.pool)
 
 	generateSuggestionsUC := recommendationApp.NewGenerateSuggestionsUseCase(
 		candidateSource, interestSource, historySource, engagementSource, qualitySource, suggestionStatsRepo, recommendationCache,
 	)
-	getSuggestionsUC := recommendationApp.NewGetSuggestionsUseCase(recommendationCache, generateSuggestionsUC, suggestionStatsRepo)
+	getSuggestionsUC := recommendationApp.NewGetSuggestionsUseCase(recommendationCache, generateSuggestionsUC, suggestionStatsRepo, activityLookup)
 	recommendationHandlers := recommendationHTTP.NewHandlers(getSuggestionsUC, generateSuggestionsUC)
 
 	// Background cache-refresh worker (Step 5, side A — periodic,

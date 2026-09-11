@@ -20,13 +20,14 @@ type GetSuggestionsUseCase struct {
 	cache           domain.RecommendationRepository
 	generate        *GenerateSuggestionsUseCase
 	suggestionStats domain.SuggestionStatsRepository
+	activities      ActivityLookup
 }
 
-func NewGetSuggestionsUseCase(cache domain.RecommendationRepository, generate *GenerateSuggestionsUseCase, suggestionStats domain.SuggestionStatsRepository) *GetSuggestionsUseCase {
-	return &GetSuggestionsUseCase{cache: cache, generate: generate, suggestionStats: suggestionStats}
+func NewGetSuggestionsUseCase(cache domain.RecommendationRepository, generate *GenerateSuggestionsUseCase, suggestionStats domain.SuggestionStatsRepository, activities ActivityLookup) *GetSuggestionsUseCase {
+	return &GetSuggestionsUseCase{cache: cache, generate: generate, suggestionStats: suggestionStats, activities: activities}
 }
 
-func (uc *GetSuggestionsUseCase) Execute(ctx context.Context, userID uuid.UUID, limit int) ([]domain.Score, error) {
+func (uc *GetSuggestionsUseCase) Execute(ctx context.Context, userID uuid.UUID, limit int) ([]domain.Suggestion, error) {
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
@@ -39,7 +40,7 @@ func (uc *GetSuggestionsUseCase) Execute(ctx context.Context, userID uuid.UUID, 
 		if err := uc.recordSuggested(ctx, userID, cached); err != nil {
 			return nil, err
 		}
-		return cached, nil
+		return uc.EnrichWithActivities(ctx, cached)
 	}
 
 	fresh, err := uc.generate.Execute(ctx, userID)
@@ -52,7 +53,37 @@ func (uc *GetSuggestionsUseCase) Execute(ctx context.Context, userID uuid.UUID, 
 	if err := uc.recordSuggested(ctx, userID, fresh); err != nil {
 		return nil, err
 	}
-	return fresh, nil
+	return uc.EnrichWithActivities(ctx, fresh)
+}
+
+// EnrichWithActivities joins each score with its activity's display
+// data in one batched lookup. It is exported so RefreshSuggestions
+// (which calls GenerateSuggestionsUseCase directly, bypassing
+// Execute above) can reuse the same join instead of duplicating it.
+// A score whose activity has since been deleted or rejected is left
+// out of the result entirely, rather than returned with a blank
+// activity — the frontend gets a shorter, always-valid list instead
+// of having to handle a null activity field itself.
+func (uc *GetSuggestionsUseCase) EnrichWithActivities(ctx context.Context, scores []domain.Score) ([]domain.Suggestion, error) {
+	ids := make([]uuid.UUID, len(scores))
+	for i, score := range scores {
+		ids[i] = score.ActivityID
+	}
+
+	summaries, err := uc.activities.ActivitySummaries(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+
+	suggestions := make([]domain.Suggestion, 0, len(scores))
+	for _, score := range scores {
+		summary, ok := summaries[score.ActivityID]
+		if !ok {
+			continue
+		}
+		suggestions = append(suggestions, domain.Suggestion{Score: score, Activity: summary})
+	}
+	return suggestions, nil
 }
 
 // recordSuggested tells the suggestion-stats table that every
