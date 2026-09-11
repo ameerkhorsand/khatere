@@ -9,6 +9,7 @@ import (
 type ListFilter struct {
 	Status     *ActivityStatus // nil = any status
 	SourceType *SourceType     // nil = any source
+	CreatedBy  *uuid.UUID      // nil = any creator
 }
 
 type ActivityRepository interface {

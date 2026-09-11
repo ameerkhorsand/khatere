@@ -14,6 +14,7 @@ type Handlers struct {
 	createActivity        *application.CreateActivityUseCase
 	getActivity           *application.GetActivityUseCase
 	listActivities        *application.ListActivitiesUseCase
+	listMyActivities      *application.ListMyActivitiesUseCase
 	listModerationQueue   *application.ListModerationQueueUseCase
 	approveActivity       *application.ApproveActivityUseCase
 	rejectActivity        *application.RejectActivityUseCase
@@ -25,6 +26,7 @@ func NewHandlers(
 	createActivity *application.CreateActivityUseCase,
 	getActivity *application.GetActivityUseCase,
 	listActivities *application.ListActivitiesUseCase,
+	listMyActivities *application.ListMyActivitiesUseCase,
 	listModerationQueue *application.ListModerationQueueUseCase,
 	approveActivity *application.ApproveActivityUseCase,
 	rejectActivity *application.RejectActivityUseCase,
@@ -32,7 +34,7 @@ func NewHandlers(
 	listActivityInterests *application.ListActivityInterestsUseCase,
 ) *Handlers {
 	return &Handlers{
-		createActivity, getActivity, listActivities,
+		createActivity, getActivity, listActivities, listMyActivities,
 		listModerationQueue, approveActivity, rejectActivity,
 		setActivityInterests, listActivityInterests,
 	}
@@ -41,6 +43,7 @@ func NewHandlers(
 func (h *Handlers) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("", h.CreateActivity)
 	r.GET("", h.ListActivities)
+	r.GET("/mine", h.ListMyActivities)
 	r.GET("/:id", h.GetActivity)
 
 	r.GET("/moderation/queue", h.ListModerationQueue)
@@ -145,6 +148,21 @@ func (h *Handlers) GetActivity(c *gin.Context) {
 
 func (h *Handlers) ListActivities(c *gin.Context) {
 	activities, err := h.listActivities.Execute(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	c.JSON(http.StatusOK, activities)
+}
+
+func (h *Handlers) ListMyActivities(c *gin.Context) {
+	accountID, err := accountIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	activities, err := h.listMyActivities.Execute(c.Request.Context(), accountID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return

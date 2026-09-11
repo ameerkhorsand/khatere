@@ -400,6 +400,106 @@
     }
   }
 
+  section.batch.manual {
+    border-left-color: var(--rail-d);
+  }
+
+  section.batch.manual code {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--raised);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+
+  .ws-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+
+  .ws-controls label {
+    font-size: 12px;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 3px;
+  }
+
+  .ws-controls select,
+  .ws-controls input[type="text"] {
+    background: var(--raised);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 7px 10px;
+    border-radius: 6px;
+  }
+
+  .ws-controls input[type="text"]:focus,
+  .ws-controls select:focus {
+    outline: 2px solid var(--rail-a);
+    outline-offset: 1px;
+  }
+
+  .ws-pair {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .ws-conn {
+    flex: 1 1 320px;
+    min-width: 300px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px 14px;
+  }
+
+  .ws-conn h3 {
+    font-size: 13px;
+    font-weight: 650;
+    margin: 0 0 8px;
+    color: var(--muted);
+  }
+
+  .ws-conn .ws-log {
+    max-height: 260px;
+  }
+
+  .pill.open { color: var(--pass); background: rgba(82, 214, 155, 0.14); }
+  .pill.connecting { color: var(--pending); background: rgba(234, 179, 76, 0.14); }
+  .pill.closed { color: var(--idle); background: rgba(74, 80, 100, 0.15); }
+  .pill.error { color: var(--fail); background: rgba(255, 109, 109, 0.14); }
+
+  .ws-log {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  .ws-log-line {
+    padding: 3px 0;
+    border-bottom: 1px solid var(--border);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .ws-log-line:last-child { border-bottom: none; }
+  .ws-log-line .ts { color: var(--muted); margin-right: 8px; }
+  .ws-log-line.in { color: var(--pass); }
+  .ws-log-line.out { color: var(--rail-a); }
+  .ws-log-line.sys { color: var(--muted); }
+  .ws-log-line.err { color: var(--fail); }
+
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
   }
@@ -492,6 +592,80 @@
     <h2>Batch 10 — Activity Interests</h2>
     <p class="sub">Tags the approved host activity from Batch 2 with interests, confirms only the creator or a moderator can do that, confirms re-tagging fully replaces the old set, and closes the loop from Batch 9 by showing InterestMatch stop being the neutral 0.5 fallback once a user's own interests overlap with the tags. B's own interests are set here for the first time, purely so B's first-ever /recommendations call (necessarily a cache miss) reflects the tag right away.</p>
     <div id="batch10Steps"></div>
+  </section>
+
+  <section class="batch manual" id="wsPanel">
+    <h2>Manual — Chat WebSocket</h2>
+    <p class="sub">Not part of "Run all" — this opens two real, independent WebSockets to <code>/hangouts/:id/chat</code>, both inside this one page, so there's no need to copy a token between browser tabs. Connect both to the same hangout as two different users, then send from one and watch it land in the other's log.</p>
+
+    <div class="ws-controls">
+      <div>
+        <label for="wsHangoutId">Hangout ID (shared by both connections)</label>
+        <input type="text" id="wsHangoutId" style="width:340px;" placeholder="paste a hangout id" />
+      </div>
+      <button id="wsUseHgIdBtn" title="Fill in Batch 3's hangout id, once Batch 3 has run">Use Batch 3 hangout</button>
+      <button id="wsUseMpHgIdBtn" title="Fill in Batch 4's hangout id, once Batch 4 has run">Use Batch 4 hangout</button>
+    </div>
+
+    <div class="ws-pair">
+      <div class="ws-conn" id="wsConn1">
+        <h3>Connection 1</h3>
+        <div class="ws-controls">
+          <div>
+            <label for="wsUserKey1">Token from</label>
+            <select id="wsUserKey1">
+              <option value="A">A</option>
+              <option value="B">B</option>
+              <option value="C">C</option>
+              <option value="HOST">HOST</option>
+              <option value="MOD">MOD</option>
+            </select>
+          </div>
+          <button class="primary" id="wsConnectBtn1">Connect</button>
+          <button id="wsDisconnectBtn1" disabled>Disconnect</button>
+          <span class="pill idle" id="wsStatusPill1">idle</span>
+          <span class="req-count" id="wsUptime1"></span>
+        </div>
+        <div class="ws-controls">
+          <input type="text" id="wsMessageInput1" style="flex:1 1 auto;" placeholder="type a message, then Send or press Enter" disabled />
+          <button id="wsSendBtn1" disabled>Send</button>
+        </div>
+        <div class="ws-log" id="wsLog1">
+          <p class="req-placeholder">Pick a user, then Connect.</p>
+        </div>
+      </div>
+
+      <div class="ws-conn" id="wsConn2">
+        <h3>Connection 2</h3>
+        <div class="ws-controls">
+          <div>
+            <label for="wsUserKey2">Token from</label>
+            <select id="wsUserKey2">
+              <option value="A">A</option>
+              <option value="B" selected>B</option>
+              <option value="C">C</option>
+              <option value="HOST">HOST</option>
+              <option value="MOD">MOD</option>
+            </select>
+          </div>
+          <button class="primary" id="wsConnectBtn2">Connect</button>
+          <button id="wsDisconnectBtn2" disabled>Disconnect</button>
+          <span class="pill idle" id="wsStatusPill2">idle</span>
+          <span class="req-count" id="wsUptime2"></span>
+        </div>
+        <div class="ws-controls">
+          <input type="text" id="wsMessageInput2" style="flex:1 1 auto;" placeholder="type a message, then Send or press Enter" disabled />
+          <button id="wsSendBtn2" disabled>Send</button>
+        </div>
+        <div class="ws-log" id="wsLog2">
+          <p class="req-placeholder">Pick a user, then Connect.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="ws-controls">
+      <button id="wsClearLogBtn">Clear both logs</button>
+    </div>
   </section>
 
   <footer class="note">
@@ -2694,6 +2868,168 @@
 
   document.getElementById("runAllBtn").addEventListener("click", runAll);
   document.getElementById("resetBtn").addEventListener("click", reset);
+
+  // ---------- manual chat WebSocket panel ----------
+  // Separate from the batches above: nothing here is graded pass/fail.
+  // Two independent connections live in this one page, each with its
+  // own dropdown pulling from the same state.users object — so you
+  // can connect as two different accounts without copying a token
+  // between browser tabs.
+  (function () {
+    const hgIdInput = document.getElementById("wsHangoutId");
+    const useHgIdBtn = document.getElementById("wsUseHgIdBtn");
+    const useMpHgIdBtn = document.getElementById("wsUseMpHgIdBtn");
+    const clearLogBtn = document.getElementById("wsClearLogBtn");
+
+    function wsUrlFor(path) {
+      // Reuses the same Base URL the REST batches use, just swapped
+      // to the ws:// / wss:// scheme a browser requires for sockets.
+      const base = document.getElementById("baseUrl").value.replace(/\/$/, "");
+      return base.replace(/^http/, "ws") + path;
+    }
+
+    // One of these gets built per connection slot (1 and 2). Keeping
+    // it as a function instead of duplicating the code twice means a
+    // fix or a tweak only has to happen in one place.
+    function createConnection(n) {
+      let ws = null;
+      let uptimeTimer = null;
+      let connectedAt = null;
+
+      const userKeySel = document.getElementById("wsUserKey" + n);
+      const connectBtn = document.getElementById("wsConnectBtn" + n);
+      const disconnectBtn = document.getElementById("wsDisconnectBtn" + n);
+      const statusPill = document.getElementById("wsStatusPill" + n);
+      const uptimeSpan = document.getElementById("wsUptime" + n);
+      const msgInput = document.getElementById("wsMessageInput" + n);
+      const sendBtn = document.getElementById("wsSendBtn" + n);
+      const logEl = document.getElementById("wsLog" + n);
+
+      function wsLog(kind, text) {
+        const placeholder = logEl.querySelector(".req-placeholder");
+        if (placeholder) placeholder.remove();
+        const line = el(
+          '<div class="ws-log-line ' + kind + '">' +
+          '<span class="ts">' + new Date().toLocaleTimeString() + '</span>' +
+          '<span></span></div>'
+        );
+        line.querySelector("span:last-child").textContent = text;
+        logEl.appendChild(line);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function setStatus(status) {
+        statusPill.textContent = status;
+        statusPill.className = "pill " + status;
+      }
+
+      function startUptimeClock() {
+        connectedAt = Date.now();
+        uptimeTimer = setInterval(() => {
+          const secs = Math.floor((Date.now() - connectedAt) / 1000);
+          uptimeSpan.textContent = "open " + secs + "s";
+        }, 1000);
+      }
+
+      function stopUptimeClock() {
+        if (uptimeTimer) clearInterval(uptimeTimer);
+        uptimeTimer = null;
+        uptimeSpan.textContent = "";
+      }
+
+      connectBtn.addEventListener("click", () => {
+        const userKey = userKeySel.value;
+        const account = u(userKey);
+        if (!account || !account.token) {
+          wsLog("err", "No token for " + userKey + " yet — run Batch 0 (or whichever batch logs them in) first.");
+          return;
+        }
+        const hangoutId = hgIdInput.value.trim();
+        if (!hangoutId) {
+          wsLog("err", "Enter a hangout id in the shared field above first.");
+          return;
+        }
+
+        const path = "/hangouts/" + encodeURIComponent(hangoutId) + "/chat?token=" + encodeURIComponent(account.token);
+        const url = wsUrlFor(path);
+        setStatus("connecting");
+        wsLog("sys", "Connecting as " + userKey + " to hangout " + hangoutId + " ...");
+
+        ws = new WebSocket(url);
+
+        ws.addEventListener("open", () => {
+          setStatus("open");
+          startUptimeClock();
+          connectBtn.disabled = true;
+          disconnectBtn.disabled = false;
+          msgInput.disabled = false;
+          sendBtn.disabled = false;
+          wsLog("sys", "Connected as " + userKey + ".");
+        });
+
+        ws.addEventListener("message", (evt) => {
+          wsLog("in", evt.data);
+        });
+
+        ws.addEventListener("error", () => {
+          setStatus("error");
+          wsLog("err", "Socket error — check the browser console and the server logs.");
+        });
+
+        ws.addEventListener("close", (evt) => {
+          setStatus("closed");
+          stopUptimeClock();
+          connectBtn.disabled = false;
+          disconnectBtn.disabled = true;
+          msgInput.disabled = true;
+          sendBtn.disabled = true;
+          wsLog("sys", "Closed (code " + evt.code + (evt.reason ? ", reason: " + evt.reason : "") + ").");
+          ws = null;
+        });
+      });
+
+      disconnectBtn.addEventListener("click", () => {
+        if (ws) ws.close(1000, "manual disconnect");
+      });
+
+      function sendCurrentMessage() {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          wsLog("err", "Not connected.");
+          return;
+        }
+        const text = msgInput.value;
+        if (!text.trim()) return;
+        ws.send(text);
+        wsLog("out", text);
+        msgInput.value = "";
+      }
+
+      sendBtn.addEventListener("click", sendCurrentMessage);
+      msgInput.addEventListener("keydown", (evt) => {
+        if (evt.key === "Enter") sendCurrentMessage();
+      });
+
+      return { clearLog: () => { logEl.innerHTML = '<p class="req-placeholder">Log cleared.</p>'; } };
+    }
+
+    const conn1 = createConnection(1);
+    const conn2 = createConnection(2);
+
+    useHgIdBtn.addEventListener("click", () => {
+      if (!state.hgID) return;
+      hgIdInput.value = state.hgID;
+    });
+
+    useMpHgIdBtn.addEventListener("click", () => {
+      if (!state.mpHangoutID) return;
+      hgIdInput.value = state.mpHangoutID;
+    });
+
+    clearLogBtn.addEventListener("click", () => {
+      conn1.clearLog();
+      conn2.clearLog();
+    });
+  })();
 
   renderSteps();
   updateSummary();

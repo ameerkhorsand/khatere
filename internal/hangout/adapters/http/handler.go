@@ -1,11 +1,13 @@
 package http
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
+	wsadapter "github.com/bLorax/khatere-backend/internal/hangout/adapters/websocket"
 	"github.com/bLorax/khatere-backend/internal/hangout/application"
 	"github.com/bLorax/khatere-backend/internal/hangout/domain"
 	"github.com/gin-gonic/gin"
@@ -25,6 +27,7 @@ type Handlers struct {
 	proposeMeetupPin   *application.ProposeMeetupPinUseCase
 	respondToMeetupPin *application.RespondToMeetupPinUseCase
 	getMeetupPin       *application.GetMeetupPinUseCase
+	chatHub            *wsadapter.Hub
 }
 
 func NewHandlers(
@@ -40,12 +43,14 @@ func NewHandlers(
 	proposeMeetupPin *application.ProposeMeetupPinUseCase,
 	respondToMeetupPin *application.RespondToMeetupPinUseCase,
 	getMeetupPin *application.GetMeetupPinUseCase,
+	chatHub *wsadapter.Hub,
 ) *Handlers {
 	return &Handlers{
 		createHangout, getHangout, listHangouts,
 		inviteParticipants, respondToInvite, cancelHangout,
 		updateStatus, sendMessage, listMessages,
 		proposeMeetupPin, respondToMeetupPin, getMeetupPin,
+		chatHub,
 	}
 }
 
@@ -66,6 +71,13 @@ func (h *Handlers) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/:id/pin", h.GetMeetupPin)
 	r.POST("/:id/pin", h.ProposeMeetupPin)
 	r.POST("/:id/pin/respond", h.RespondToMeetupPin)
+}
+
+// RegisterChatSocketRoute wires the live chat socket. Keep it apart
+// from RegisterRoutes so it can sit behind AuthRequiredQuery instead
+// of the normal header-based AuthRequired middleware — see Step 5.
+func (h *Handlers) RegisterChatSocketRoute(r *gin.RouterGroup) {
+	r.GET("/:id/chat", h.ChatSocket)
 }
 
 func accountIDFromContext(c *gin.Context) (uuid.UUID, error) {
@@ -405,6 +417,15 @@ func (h *Handlers) SendMessage(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, message)
+
+	// Fan the REST-sent message out to any live socket listeners too,
+	// so a client that posted over REST still shows up for peers who
+	// are connected over the chat socket.
+	if h.chatHub != nil {
+		if payload, err := json.Marshal(message); err == nil {
+			h.chatHub.Broadcast(id, payload)
+		}
+	}
 }
 
 func (h *Handlers) ListMessages(c *gin.Context) {
@@ -450,6 +471,67 @@ func (h *Handlers) ListMessages(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, messages)
+}
+
+// ChatSocket upgrades the connection to a WebSocket and streams live
+// chat messages for one hangout. Auth for this route comes from
+// AuthRequiredQuery (see Step 5), since a browser cannot attach a
+// normal Authorization header to a WebSocket handshake.
+func (h *Handlers) ChatSocket(c *gin.Context) {
+	id, ok := hangoutIDParam(c)
+	if !ok {
+		return
+	}
+	accountID, err := accountIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	// Access check before upgrading: reuse ListMessages, which already
+	// confirms the caller has a participant row for this hangout.
+	if _, err := h.listMessages.Execute(c.Request.Context(), application.ListMessagesInput{
+		HangoutID:   id,
+		RequesterID: accountID,
+		Limit:       1,
+	}); err != nil {
+		handleUseCaseError(c, err)
+		return
+	}
+
+	conn, err := wsadapter.Upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		return
+	}
+
+	client := wsadapter.NewClient(conn, id, accountID)
+	h.chatHub.Register(id, client)
+	go client.WritePump()
+
+	defer h.chatHub.Unregister(id, client)
+	for {
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+
+		message, err := h.sendMessage.Execute(c.Request.Context(), application.SendMessageInput{
+			HangoutID: id,
+			SenderID:  accountID,
+			Content:   string(raw),
+		})
+		if err != nil {
+			// Bad message from this one client — skip it, keep the
+			// connection open, don't kill the whole socket.
+			continue
+		}
+
+		payload, err := json.Marshal(message)
+		if err != nil {
+			continue
+		}
+		h.chatHub.Broadcast(id, payload)
+	}
 }
 
 // -----------------------------------------------------------------

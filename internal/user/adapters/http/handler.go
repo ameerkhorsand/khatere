@@ -12,6 +12,7 @@ import (
 
 type Handlers struct {
 	createProfile *application.CreateProfileUseCase
+	getProfile    *application.GetProfileUseCase
 	updateProfile *application.UpdateProfileUseCase
 	setInterests  *application.SetInterestsUseCase
 	listInterests *application.ListInterestsUseCase
@@ -20,16 +21,18 @@ type Handlers struct {
 
 func NewHandlers(
 	createProfile *application.CreateProfileUseCase,
+	getProfile *application.GetProfileUseCase,
 	updateProfile *application.UpdateProfileUseCase,
 	setInterests *application.SetInterestsUseCase,
 	listInterests *application.ListInterestsUseCase,
 	listCatalog *application.ListInterestCatalogUseCase,
 ) *Handlers {
-	return &Handlers{createProfile, updateProfile, setInterests, listInterests, listCatalog}
+	return &Handlers{createProfile, getProfile, updateProfile, setInterests, listInterests, listCatalog}
 }
 
 func (h *Handlers) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/profile", h.CreateProfile)
+	r.GET("/profile", h.GetProfile)
 	r.PATCH("/profile", h.UpdateProfile)
 	r.PUT("/interests", h.SetInterests)
 	r.GET("/interests", h.ListInterests)
@@ -83,6 +86,26 @@ func (h *Handlers) CreateProfile(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, user)
+}
+
+func (h *Handlers) GetProfile(c *gin.Context) {
+	accountID, err := accountIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	user, err := h.getProfile.Execute(c.Request.Context(), accountID)
+	if err != nil {
+		if errors.Is(err, domain.ErrUserNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user profile not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, user)
 }
 
 type updateProfileRequest struct {

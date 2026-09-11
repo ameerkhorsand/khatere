@@ -62,6 +62,11 @@ func (r *ActivityRepository) List(ctx context.Context, filter domain.ListFilter)
 		args = append(args, *filter.SourceType)
 		argN++
 	}
+	if filter.CreatedBy != nil {
+		query += ` AND created_by = $` + strconv.Itoa(argN)
+		args = append(args, *filter.CreatedBy)
+		argN++
+	}
 	query += ` ORDER BY created_at DESC`
 
 	rows, err := r.pool.Query(ctx, query, args...)

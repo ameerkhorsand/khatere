@@ -48,6 +48,7 @@ import (
 	ratingPG "github.com/bLorax/khatere-backend/internal/rating/adapters/postgres"
 	ratingApp "github.com/bLorax/khatere-backend/internal/rating/application"
 
+	hangoutWS "github.com/bLorax/khatere-backend/internal/hangout/adapters/websocket"
 	qrcodeHTTP "github.com/bLorax/khatere-backend/internal/qrcode/adapters/http"
 	qrcodePG "github.com/bLorax/khatere-backend/internal/qrcode/adapters/postgres"
 	qrcodeApp "github.com/bLorax/khatere-backend/internal/qrcode/application"
@@ -128,12 +129,13 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
 	interestRepo := userPG.NewInterestRepository(d.pool)
 
 	createProfileUC := userApp.NewCreateProfileUseCase(userRepo)
+	getProfileUC := userApp.NewGetProfileUseCase(userRepo)
 	updateProfileUC := userApp.NewUpdateProfileUseCase(userRepo)
 	setInterestsUC := userApp.NewSetInterestsUseCase(interestRepo)
 	listInterestsUC := userApp.NewListInterestsUseCase(interestRepo)
 	listCatalogUC := userApp.NewListInterestCatalogUseCase(interestRepo)
 
-	userHandlers := userHTTP.NewHandlers(createProfileUC, updateProfileUC, setInterestsUC, listInterestsUC, listCatalogUC)
+	userHandlers := userHTTP.NewHandlers(createProfileUC, getProfileUC, updateProfileUC, setInterestsUC, listInterestsUC, listCatalogUC)
 	userPublicHandlers := userHTTP.NewPublicHandlers(userRepo)
 
 	// --- Circle domain wiring ---
@@ -183,12 +185,14 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
 	// --- Host domain wiring ---
 	hostRepo := hostPG.NewHostRepository(d.pool)
 	createHostProfileUC := hostApp.NewCreateHostProfileUseCase(hostRepo)
-	hostHandlers := hostHTTP.NewHandlers(createHostProfileUC)
+	getHostProfileUC := hostApp.NewGetHostProfileUseCase(hostRepo)
+	hostHandlers := hostHTTP.NewHandlers(createHostProfileUC, getHostProfileUC)
 
 	// --- Moderator domain wiring ---
 	moderatorRepo := moderatorPG.NewModeratorRepository(d.pool)
 	createModeratorProfileUC := moderatorApp.NewCreateModeratorProfileUseCase(moderatorRepo)
-	moderatorHandlers := moderatorHTTP.NewHandlers(createModeratorProfileUC)
+	getModeratorProfileUC := moderatorApp.NewGetModeratorProfileUseCase(moderatorRepo)
+	moderatorHandlers := moderatorHTTP.NewHandlers(createModeratorProfileUC, getModeratorProfileUC)
 
 	// --- Activity domain wiring ---
 	activityRepo := activityPG.NewActivityRepository(d.pool)
@@ -197,6 +201,7 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
 	createActivityUC := activityApp.NewCreateActivityUseCase(activityRepo)
 	getActivityUC := activityApp.NewGetActivityUseCase(activityRepo)
 	listActivitiesUC := activityApp.NewListActivitiesUseCase(activityRepo)
+	listMyActivitiesUC := activityApp.NewListMyActivitiesUseCase(activityRepo)
 	listModerationQueueUC := activityApp.NewListModerationQueueUseCase(activityRepo)
 	approveActivityUC := activityApp.NewApproveActivityUseCase(activityRepo)
 	rejectActivityUC := activityApp.NewRejectActivityUseCase(activityRepo)
@@ -207,6 +212,7 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
 		createActivityUC,
 		getActivityUC,
 		listActivitiesUC,
+		listMyActivitiesUC,
 		listModerationQueueUC,
 		approveActivityUC,
 		rejectActivityUC,
@@ -367,11 +373,14 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
 	respondToMeetupPinUC := hangoutApp.NewRespondToMeetupPinUseCase(hangoutRepo, meetupPinRepo, pinConfirmationRepo, hangoutNotifier)
 	getMeetupPinUC := hangoutApp.NewGetMeetupPinUseCase(participantRepo, meetupPinRepo, pinConfirmationRepo)
 
+	chatHub := hangoutWS.NewHub()
+
 	hangoutHandlers := hangoutHTTP.NewHandlers(
 		createHangoutUC, getHangoutUC, listHangoutsUC,
 		inviteParticipantsUC, respondToInviteUC, cancelHangoutUC,
 		updateHangoutStatusUC, sendMessageUC, listMessagesUC,
 		proposeMeetupPinUC, respondToMeetupPinUC, getMeetupPinUC,
+		chatHub,
 	)
 
 	// --- Archive domain wiring (remaining use cases + handlers) ---
@@ -487,6 +496,9 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker) {
 	hangoutGroup := router.Group("/hangouts")
 	hangoutGroup.Use(authMW)
 	hangoutHandlers.RegisterRoutes(hangoutGroup)
+	hangoutChatGroup := router.Group("/hangouts")
+	hangoutChatGroup.Use(middleware.AuthRequiredQuery(d.cfg.JWTSecret))
+	hangoutHandlers.RegisterChatSocketRoute(hangoutChatGroup)
 
 	attendanceGroup := router.Group("/attendance")
 	attendanceGroup.Use(authMW)
