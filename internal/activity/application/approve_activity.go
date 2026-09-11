@@ -14,10 +14,11 @@ import (
 type ApproveActivityUseCase struct {
 	activities domain.ActivityRepository
 	notify     NotificationPublisher
+	cache      ActivityCache
 }
 
-func NewApproveActivityUseCase(activities domain.ActivityRepository, notify NotificationPublisher) *ApproveActivityUseCase {
-	return &ApproveActivityUseCase{activities: activities, notify: notify}
+func NewApproveActivityUseCase(activities domain.ActivityRepository, notify NotificationPublisher, cache ActivityCache) *ApproveActivityUseCase {
+	return &ApproveActivityUseCase{activities: activities, notify: notify, cache: cache}
 }
 
 type ApproveActivityInput struct {
@@ -42,6 +43,17 @@ func (uc *ApproveActivityUseCase) Execute(ctx context.Context, in ApproveActivit
 
 	if err := uc.activities.Update(ctx, activity); err != nil {
 		return nil, err
+	}
+
+	// Best-effort, same reasoning as the notification publish below:
+	// the approval already succeeded, so a cache invalidation failure
+	// must not undo that. Both entries need invalidating — the
+	// activity's own detail, and the approved list it just joined.
+	if err := uc.cache.InvalidateDetail(ctx, activity.ID); err != nil {
+		log.Printf("activity: detail cache invalidation failed for %s: %v", activity.ID, err)
+	}
+	if err := uc.cache.InvalidateList(ctx); err != nil {
+		log.Printf("activity: list cache invalidation failed: %v", err)
 	}
 
 	// Best-effort, same as ApproveCommentUseCase's summary

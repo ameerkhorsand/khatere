@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/bLorax/khatere-backend/internal/activity/domain"
@@ -10,10 +11,11 @@ import (
 
 type CreateActivityUseCase struct {
 	activities domain.ActivityRepository
+	cache      ActivityCache
 }
 
-func NewCreateActivityUseCase(activities domain.ActivityRepository) *CreateActivityUseCase {
-	return &CreateActivityUseCase{activities: activities}
+func NewCreateActivityUseCase(activities domain.ActivityRepository, cache ActivityCache) *CreateActivityUseCase {
+	return &CreateActivityUseCase{activities: activities, cache: cache}
 }
 
 type CreateActivityInput struct {
@@ -50,6 +52,16 @@ func (uc *CreateActivityUseCase) Execute(ctx context.Context, in CreateActivityI
 
 	if err := uc.activities.Create(ctx, activity); err != nil {
 		return nil, err
+	}
+
+	// Only a host/moderator-created activity (status already
+	// Approved) actually changes the approved list — a user-created
+	// one starts Pending and isn't in that list yet, so invalidating
+	// here would just be a wasted Redis call.
+	if activity.Status == domain.ActivityStatusApproved {
+		if err := uc.cache.InvalidateList(ctx); err != nil {
+			log.Printf("activity: list cache invalidation failed: %v", err)
+		}
 	}
 
 	return activity, nil

@@ -48,6 +48,7 @@ import (
 
 	activityHTTP "github.com/bLorax/khatere-backend/internal/activity/adapters/http"
 	activityPG "github.com/bLorax/khatere-backend/internal/activity/adapters/postgres"
+	activityRedis "github.com/bLorax/khatere-backend/internal/activity/adapters/redis"
 	activityApp "github.com/bLorax/khatere-backend/internal/activity/application"
 
 	ratingHTTP "github.com/bLorax/khatere-backend/internal/rating/adapters/http"
@@ -225,14 +226,15 @@ func newRouter(d deps) (*gin.Engine, *worker.RefreshWorker, *notificationWorker.
 	// --- Activity domain wiring ---
 	activityRepo := activityPG.NewActivityRepository(d.pool)
 	activityInterestRepo := activityPG.NewActivityInterestRepository(d.pool)
+	activityCache := activityRedis.NewActivityCache(d.redisClient)
 
-	createActivityUC := activityApp.NewCreateActivityUseCase(activityRepo)
-	getActivityUC := activityApp.NewGetActivityUseCase(activityRepo)
-	listActivitiesUC := activityApp.NewListActivitiesUseCase(activityRepo)
+	createActivityUC := activityApp.NewCreateActivityUseCase(activityRepo, activityCache)
+	getActivityUC := activityApp.NewGetActivityUseCase(activityRepo, activityCache)
+	listActivitiesUC := activityApp.NewListActivitiesUseCase(activityRepo, activityCache)
 	listMyActivitiesUC := activityApp.NewListMyActivitiesUseCase(activityRepo)
 	listModerationQueueUC := activityApp.NewListModerationQueueUseCase(activityRepo)
-	approveActivityUC := activityApp.NewApproveActivityUseCase(activityRepo, notificationProducer)
-	rejectActivityUC := activityApp.NewRejectActivityUseCase(activityRepo, notificationProducer)
+	approveActivityUC := activityApp.NewApproveActivityUseCase(activityRepo, notificationProducer, activityCache)
+	rejectActivityUC := activityApp.NewRejectActivityUseCase(activityRepo, notificationProducer, activityCache)
 	setActivityInterestsUC := activityApp.NewSetActivityInterestsUseCase(activityRepo, activityInterestRepo)
 	listActivityInterestsUC := activityApp.NewListActivityInterestsUseCase(activityInterestRepo)
 

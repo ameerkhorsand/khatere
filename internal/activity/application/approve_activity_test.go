@@ -44,6 +44,40 @@ func (f *fakeNotificationPublisher) Publish(ctx context.Context, e notificationd
 	return f.publishErr
 }
 
+// fakeActivityCache is a no-op cache by default — every test that
+// doesn't care about caching still needs a valid ActivityCache to
+// pass in, since it's a required constructor argument now.
+type fakeActivityCache struct {
+	invalidateDetailErr error
+	invalidateListErr   error
+
+	invalidateDetailCalled bool
+	invalidateListCalled   bool
+	invalidatedActivity    uuid.UUID
+}
+
+func (f *fakeActivityCache) GetDetail(ctx context.Context, activityID uuid.UUID) (*domain.Activity, bool, error) {
+	return nil, false, nil
+}
+func (f *fakeActivityCache) SetDetail(ctx context.Context, activity *domain.Activity) error {
+	return nil
+}
+func (f *fakeActivityCache) InvalidateDetail(ctx context.Context, activityID uuid.UUID) error {
+	f.invalidateDetailCalled = true
+	f.invalidatedActivity = activityID
+	return f.invalidateDetailErr
+}
+func (f *fakeActivityCache) GetList(ctx context.Context) ([]domain.Activity, bool, error) {
+	return nil, false, nil
+}
+func (f *fakeActivityCache) SetList(ctx context.Context, activities []domain.Activity) error {
+	return nil
+}
+func (f *fakeActivityCache) InvalidateList(ctx context.Context) error {
+	f.invalidateListCalled = true
+	return f.invalidateListErr
+}
+
 // --- tests ---------------------------------------------------------
 
 func TestApproveActivityUseCase_Execute(t *testing.T) {
@@ -51,7 +85,7 @@ func TestApproveActivityUseCase_Execute(t *testing.T) {
 		activity := &domain.Activity{ID: uuid.New(), Status: domain.ActivityStatusApproved}
 		repo := &fakeActivityRepo{activity: activity}
 		notify := &fakeNotificationPublisher{}
-		uc := NewApproveActivityUseCase(repo, notify)
+		uc := NewApproveActivityUseCase(repo, notify, &fakeActivityCache{})
 
 		_, err := uc.Execute(context.Background(), ApproveActivityInput{ActivityID: activity.ID})
 
@@ -64,7 +98,7 @@ func TestApproveActivityUseCase_Execute(t *testing.T) {
 		activity := &domain.Activity{ID: uuid.New(), Status: domain.ActivityStatusPending}
 		repo := &fakeActivityRepo{activity: activity, updateErr: errors.New("version conflict")}
 		notify := &fakeNotificationPublisher{}
-		uc := NewApproveActivityUseCase(repo, notify)
+		uc := NewApproveActivityUseCase(repo, notify, &fakeActivityCache{})
 
 		_, err := uc.Execute(context.Background(), ApproveActivityInput{ActivityID: activity.ID})
 
@@ -77,7 +111,7 @@ func TestApproveActivityUseCase_Execute(t *testing.T) {
 		activity := &domain.Activity{ID: uuid.New(), Status: domain.ActivityStatusPending, CreatedBy: uuid.New()}
 		repo := &fakeActivityRepo{activity: activity}
 		notify := &fakeNotificationPublisher{publishErr: errors.New("kafka unreachable")}
-		uc := NewApproveActivityUseCase(repo, notify)
+		uc := NewApproveActivityUseCase(repo, notify, &fakeActivityCache{})
 
 		got, err := uc.Execute(context.Background(), ApproveActivityInput{ActivityID: activity.ID})
 
@@ -94,7 +128,8 @@ func TestApproveActivityUseCase_Execute(t *testing.T) {
 		repo := &fakeActivityRepo{activity: activity}
 		notify := &fakeNotificationPublisher{}
 		moderatorID := uuid.New()
-		uc := NewApproveActivityUseCase(repo, notify)
+		cache := &fakeActivityCache{}
+		uc := NewApproveActivityUseCase(repo, notify, cache)
 
 		got, err := uc.Execute(context.Background(), ApproveActivityInput{ActivityID: activity.ID, ModeratorID: moderatorID})
 
@@ -115,6 +150,43 @@ func TestApproveActivityUseCase_Execute(t *testing.T) {
 		}
 		if notify.published == nil || notify.published.Type != notificationdomain.TypeActivityApproved {
 			t.Errorf("expected a TypeActivityApproved notification to be published")
+		}
+	})
+
+	t.Run("success invalidates both the detail and list cache", func(t *testing.T) {
+		activity := &domain.Activity{ID: uuid.New(), Status: domain.ActivityStatusPending, CreatedBy: uuid.New()}
+		repo := &fakeActivityRepo{activity: activity}
+		notify := &fakeNotificationPublisher{}
+		cache := &fakeActivityCache{}
+		uc := NewApproveActivityUseCase(repo, notify, cache)
+
+		_, err := uc.Execute(context.Background(), ApproveActivityInput{ActivityID: activity.ID})
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !cache.invalidateDetailCalled {
+			t.Errorf("expected the detail cache to be invalidated after approval")
+		}
+		if cache.invalidatedActivity != activity.ID {
+			t.Errorf("invalidated activity = %v, want %v", cache.invalidatedActivity, activity.ID)
+		}
+		if !cache.invalidateListCalled {
+			t.Errorf("expected the list cache to be invalidated after approval, since the activity now joins the approved feed")
+		}
+	})
+
+	t.Run("cache invalidation failure does not fail the approval", func(t *testing.T) {
+		activity := &domain.Activity{ID: uuid.New(), Status: domain.ActivityStatusPending, CreatedBy: uuid.New()}
+		repo := &fakeActivityRepo{activity: activity}
+		notify := &fakeNotificationPublisher{}
+		cache := &fakeActivityCache{invalidateDetailErr: errors.New("redis unreachable"), invalidateListErr: errors.New("redis unreachable")}
+		uc := NewApproveActivityUseCase(repo, notify, cache)
+
+		_, err := uc.Execute(context.Background(), ApproveActivityInput{ActivityID: activity.ID})
+
+		if err != nil {
+			t.Fatalf("approval must succeed even if cache invalidation fails, got: %v", err)
 		}
 	})
 }

@@ -14,10 +14,11 @@ import (
 type RejectActivityUseCase struct {
 	activities domain.ActivityRepository
 	notify     NotificationPublisher
+	cache      ActivityCache
 }
 
-func NewRejectActivityUseCase(activities domain.ActivityRepository, notify NotificationPublisher) *RejectActivityUseCase {
-	return &RejectActivityUseCase{activities: activities, notify: notify}
+func NewRejectActivityUseCase(activities domain.ActivityRepository, notify NotificationPublisher, cache ActivityCache) *RejectActivityUseCase {
+	return &RejectActivityUseCase{activities: activities, notify: notify, cache: cache}
 }
 
 type RejectActivityInput struct {
@@ -44,6 +45,13 @@ func (uc *RejectActivityUseCase) Execute(ctx context.Context, in RejectActivityI
 
 	if err := uc.activities.Update(ctx, activity); err != nil {
 		return nil, err
+	}
+
+	// A rejected activity was never in the approved list, so only
+	// its own detail entry (if it was ever cached, e.g. previewed by
+	// a moderator) needs invalidating — no list invalidation here.
+	if err := uc.cache.InvalidateDetail(ctx, activity.ID); err != nil {
+		log.Printf("activity: detail cache invalidation failed for %s: %v", activity.ID, err)
 	}
 
 	metadata, _ := json.Marshal(map[string]string{
