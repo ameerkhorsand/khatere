@@ -48,7 +48,7 @@ jobs:
           script: |
             cd /home/admin/khatere-new/khatere
             git pull origin main
-            sql-migrate up -env=development
+            /home/admin/go/bin/sql-migrate up
             docker compose pull api
             docker compose up -d api
             sleep 5
